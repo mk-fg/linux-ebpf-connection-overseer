@@ -1,6 +1,5 @@
-# Makefile for eBPF loader binary from opensnitch/Makefile
+# Makefile for eBPF loader binary
 
-# XXX: check if libbpf can replace those
 KERNEL_DIR := $(shell \
 	dir=/usr/src/linux dir_chk=$$dir/include; \
 	[ -d "$$dir_chk" ] || dir=/lib/modules/`uname -r`/source dir_chk=$$dir; \
@@ -51,11 +50,11 @@ EBPF_CFLAGS = -I. \
 	-fno-stack-protector \
 	-fcf-protection \
 	-g -O2 -emit-llvm
-EBPF_STRIP := $(STRIP)
+EBPF_STRIP := $(STRIP) -g
 
-APP_CFLAGS := -Wall -Ibuild $(APP_EXTRA_CFLAGS)
-APP_LDFLAGS := $(LDFLAGS) $(APP_EXTRA_LDFLAGS)
-APP_STRIP := $(STRIP)
+BIN_CFLAGS := -Wall -Ibuild $(BIN_EXTRA_CFLAGS)
+BIN_LDFLAGS := $(LDFLAGS) $(BIN_EXTRA_LDFLAGS)
+BIN_STRIP := $(STRIP)
 
 
 all: leco-ebpf-load
@@ -82,18 +81,18 @@ build/bpftool/bootstrap/bpftool: | build/bpftool bpftool/libbpf/src
 	$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=../../build/bpftool/ -C bpftool/src bootstrap
 
 
-# .bc -> .o -> .skel.h -> main binary
+# .bc -> .o -> .skel.h -> wrapper binary
 
 build/ebpf.bc: ebpf.c | build build/libbpf.a
 	$(CC) $(EBPF_CFLAGS) -c -o $@ $<
 
 build/ebpf.o: build/ebpf.bc $(wildcard build/bpf/*.[ch]) | build
 	$(LLC) -march=bpf -mcpu=generic -filetype=obj -o $@ $<
-	$(EBPF_STRIP) -g $@
+	$(EBPF_STRIP) $@
 
 build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
 	./build/bpftool/bootstrap/bpftool gen skeleton $< > $@
 
 leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
-	$(CC) $< build/libbpf.a $(APP_CFLAGS) $(APP_LDFLAGS) -lelf -lz -lsystemd -o $@
-	$(APP_STRIP) $@
+	$(CC) $< build/libbpf.a $(BIN_CFLAGS) $(BIN_LDFLAGS) -lelf -lz -lsystemd -o $@
+	$(BIN_STRIP) $@
