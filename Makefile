@@ -1,23 +1,17 @@
-# Makefile for eBPF code from opensnitch/Makefile
+# Makefile for eBPF loader binary from opensnitch/Makefile
 
-# -- Added /usr/src/linux check here for my setup
-# -- Old /lib/modules/ and /usr/src/linux-headers-* are supposedly for normal distros
-KERNEL_DIR ?= $(shell \
+KERNEL_DIR := $(shell \
 	dir=/usr/src/linux dir_chk=$$dir/include; \
 	[ -d "$$dir_chk" ] || dir=/lib/modules/`uname -r`/source dir_chk=$$dir; \
 	[ -d "$$dir_chk" ] || dir=; \
 	echo "$$dir" )
-KERNEL_HEADERS ?= /usr/src/linux-headers-$(shell uname -r)/
+KERNEL_HEADERS := /usr/src/linux-headers-$(shell uname -r)/
 
-# -- Added LLVM_STRIP to remove debug info here
-LLVM_STRIP ?= llvm-strip
+CC := clang
+LLC := llc
+LLVM_STRIP := llvm-strip
 
-CC = clang
-LLC ?= llc
-ARCH ?= $(shell uname -m)
-
-# as in /usr/src/linux-headers-*/arch/
-# TODO: extract correctly the archs, and add more if needed.
+ARCH := $(shell uname -m)
 ifeq ($(ARCH),x86_64)
 	ARCH := x86
 else ifeq ($(ARCH),i686)
@@ -27,16 +21,11 @@ else ifeq ($(ARCH),armv7l)
 else ifeq ($(ARCH),aarch64)
 	ARCH := arm64
 endif
-
 ifeq ($(ARCH),arm)
-	# on previous archs, it fails with "SMP not supported on pre-ARMv6"
-	EXTRA_FLAGS = "-D__LINUX_ARM_ARCH__=7"
+	EBPF_EXTRA_FLAGS := "-D__LINUX_ARM_ARCH__=7"
 endif
 
-# -- Added couple flags here to suppress 6.6-6.12 kernel header warnings
-SRC := $(wildcard *.c)
-BIN := $(SRC:.c=.o)
-CFLAGS = -I. \
+EBPF_CFLAGS = -I. \
 	-I$(KERNEL_HEADERS)/arch/$(ARCH)/include/generated/ \
 	-I$(KERNEL_HEADERS)/include \
 	-include $(KERNEL_DIR)/include/linux/kconfig.h \
@@ -50,7 +39,7 @@ CFLAGS = -I. \
 	-I$(KERNEL_DIR)/tools/testing/selftests/bpf/ \
 	-D__KERNEL__ -D__BPF_TRACING__ -Wno-unused-value -Wno-pointer-sign \
 	-D__TARGET_ARCH_$(ARCH) -Wno-compare-distinct-pointer-types \
-	$(EXTRA_FLAGS) \
+	$(EBPF_EXTRA_FLAGS) \
 	-Wunused \
 	-Wno-unused-value \
 	-Wno-gnu-variable-sized-type-not-at-end \
@@ -62,16 +51,45 @@ CFLAGS = -I. \
 	-fcf-protection \
 	-g -O2 -emit-llvm
 
-all: $(BIN)
+APP_CFLAGS := -g -Wall -Ibuild
+APP_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
 
-%.bc: %.c $(wildcard %.h)
-	$(CC) $(CFLAGS) -c $<
 
-%.o: %.bc
+all: leco-ebpf-load
+
+clean:
+	rm -rf build leco-ebpf-load
+
+.SUFFIXES:
+
+
+# libbpf + bpftool
+
+build build/libbpf build/bpftool:
+	mkdir -p $@
+
+bpftool/libbpf/src:
+	ln -s ../../libbpf/src bpftool/libbpf/src
+
+build/libbpf.a: $(wildcard libbpf/src/*.[ch] libbpf/src/Makefile) | build/libbpf
+	$(MAKE) -C libbpf/src BUILD_STATIC_ONLY=1 \
+		OBJDIR=../../build/libbpf DESTDIR=../../build/ INCLUDEDIR= LIBDIR= UAPIDIR= install
+
+build/bpftool/bootstrap/bpftool: | build/bpftool bpftool/libbpf/src
+	$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=../../build/bpftool/ -C bpftool/src bootstrap
+
+
+# .bc -> .o -> .skel.h -> main binary
+
+build/ebpf.bc: ebpf.c | build build/libbpf.a
+	$(CC) $(EBPF_CFLAGS) -c -o $@ $<
+
+build/ebpf.o: build/ebpf.bc $(wildcard build/bpf/*.[ch]) | build
 	$(LLC) -march=bpf -mcpu=generic -filetype=obj -o $@ $<
 	$(LLVM_STRIP) -g $@
 
-clean:
-	rm -f $(BIN)
+build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
+	./build/bpftool/bootstrap/bpftool gen skeleton $< > $@
 
-.SUFFIXES:
+leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
+	$(CC) $< build/libbpf.a $(APP_CFLAGS) $(ALL_LDFLAGS) -lelf -lz -o $@

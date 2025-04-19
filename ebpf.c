@@ -1,7 +1,7 @@
-// eBPF here is based on opensnitch code, intended to be as close to that as possible,
-//   so that any useful changes there would be easy to apply here as patches as well.
+// eBPF here is based on opensnitch code, ideally not too mangled, so that
+//  opensnitch ebpf_prog patches can be applied here too. Last sync: aab65908 2025-04-14
 
-// XXX: check packets on some skb-egress hook, mark in maps if any got through
+// XXX: check packets on some skb-egress hook, mark in maps which ones get through
 // XXX: add cgroup id's to maps
 // XXX: resolve cgroup ids to names, if possible here
 
@@ -11,8 +11,8 @@
 #include <linux/sched.h>
 #include <linux/ptrace.h>
 #include <uapi/linux/bpf.h>
-#include "bpf_headers/bpf_helpers.h"
-#include "bpf_headers/bpf_tracing.h"
+#include "build/bpf/bpf_helpers.h"
+#include "build/bpf/bpf_tracing.h"
 
 #define MAPSIZE 12000
 #define debug(fmt, ...) ({ char __fmt[] = fmt; \
@@ -106,28 +106,28 @@ struct {
 	__type(key, struct tcp_key_t);
 	__type(value, struct tcp_value_t);
 	__uint(max_entries, MAPSIZE+1);
-} tcpMap SEC(".maps");
+} tcpv4_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct tcpv6_key_t);
 	__type(value, struct tcpv6_value_t);
 	__uint(max_entries, MAPSIZE+2);
-} tcpv6Map SEC(".maps");
+} tcpv6_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct udp_key_t);
 	__type(value, struct udp_value_t);
 	__uint(max_entries, MAPSIZE+3);
-} udpMap SEC(".maps");
+} udpv4_map SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct udpv6_key_t);
 	__type(value, struct udpv6_value_t);
 	__uint(max_entries, MAPSIZE+4);
-} udpv6Map SEC(".maps");
+} udpv6_map SEC(".maps");
 
 // for TCP the IP-tuple can be copied from "struct sock" only upon return from tcp_connect().
 // We stash the socket here to look it up upon return.
@@ -138,21 +138,21 @@ struct {
 	// to avoid pointer size related quirks on x86_32
 	__type(value, u64);
 	__uint(max_entries, 300);
-} tcpsock SEC(".maps");
+} tcpv4_sock SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, u64);
 	__type(value, u64);
 	__uint(max_entries, 300);
-} tcpv6sock SEC(".maps");
+} tcpv6_sock SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, u64);
 	__type(value, u64);
 	__uint(max_entries, 300);
-} icmpsock SEC(".maps");
+} icmp_sock SEC(".maps");
 
 // initializing variables with __builtin_memset() is required
 // for compatibility with bpf on kernel 4.4
@@ -170,7 +170,7 @@ int kprobe__tcp_v4_connect(struct pt_regs *ctx)
 
 	u64 skp = (u64)sk;
 	u64 pid_tgid = bpf_get_current_pid_tgid();
-	bpf_map_update_elem(&tcpsock, &pid_tgid, &skp, BPF_ANY);
+	bpf_map_update_elem(&tcpv4_sock, &pid_tgid, &skp, BPF_ANY);
 	return 0;
 };
 
@@ -178,7 +178,7 @@ SEC("kretprobe/tcp_v4_connect")
 int kretprobe__tcp_v4_connect(struct pt_regs *ctx)
 {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
-	u64 *skp = bpf_map_lookup_elem(&tcpsock, &pid_tgid);
+	u64 *skp = bpf_map_lookup_elem(&tcpv4_sock, &pid_tgid);
 	if (skp == NULL) {return 0;}
 
 	struct sock *sk;
@@ -197,9 +197,9 @@ int kretprobe__tcp_v4_connect(struct pt_regs *ctx)
 	tcp_value.pid = pid_tgid >> 32;
 	tcp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 	bpf_get_current_comm(&tcp_value.comm, sizeof(tcp_value.comm));
-	bpf_map_update_elem(&tcpMap, &tcp_key, &tcp_value, BPF_ANY);
+	bpf_map_update_elem(&tcpv4_map, &tcp_key, &tcp_value, BPF_ANY);
 
-	bpf_map_delete_elem(&tcpsock, &pid_tgid);
+	bpf_map_delete_elem(&tcpv4_sock, &pid_tgid);
 	return 0;
 };
 
@@ -214,7 +214,7 @@ int kprobe__tcp_v6_connect(struct pt_regs *ctx)
 
 	u64 skp = (u64)sk;
 	u64 pid_tgid = bpf_get_current_pid_tgid();
-	bpf_map_update_elem(&tcpv6sock, &pid_tgid, &skp, BPF_ANY);
+	bpf_map_update_elem(&tcpv6_sock, &pid_tgid, &skp, BPF_ANY);
 	return 0;
 };
 
@@ -222,7 +222,7 @@ SEC("kretprobe/tcp_v6_connect")
 int kretprobe__tcp_v6_connect(struct pt_regs *ctx)
 {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
-	u64 *skp = bpf_map_lookup_elem(&tcpv6sock, &pid_tgid);
+	u64 *skp = bpf_map_lookup_elem(&tcpv6_sock, &pid_tgid);
 	if (skp == NULL) {return 0;}
 
 	struct sock *sk;
@@ -249,9 +249,9 @@ int kretprobe__tcp_v6_connect(struct pt_regs *ctx)
 	tcpv6_value.pid = pid_tgid >> 32;
 	tcpv6_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 	bpf_get_current_comm(&tcpv6_value.comm, sizeof(tcpv6_value.comm));
-	bpf_map_update_elem(&tcpv6Map, &tcpv6_key, &tcpv6_value, BPF_ANY);
+	bpf_map_update_elem(&tcpv6_map, &tcpv6_key, &tcpv6_value, BPF_ANY);
 
-	bpf_map_delete_elem(&tcpv6sock, &pid_tgid);
+	bpf_map_delete_elem(&tcpv6_sock, &pid_tgid);
 	return 0;
 };
 
@@ -294,7 +294,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx)
 
 	u32 zero_key = 0;
 	__builtin_memset(&zero_key, 0, sizeof(zero_key));
-	struct udp_value_t *lookedupValue = bpf_map_lookup_elem(&udpMap, &udp_key);
+	struct udp_value_t *lookedupValue = bpf_map_lookup_elem(&udpv4_map, &udp_key);
 	u64 pid = bpf_get_current_pid_tgid() >> 32;
 	if (lookedupValue == NULL || lookedupValue->pid != pid) {
 		struct udp_value_t udp_value={0};
@@ -302,7 +302,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx)
 		udp_value.pid = pid;
 		udp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 		bpf_get_current_comm(&udp_value.comm, sizeof(udp_value.comm));
-		bpf_map_update_elem(&udpMap, &udp_key, &udp_value, BPF_ANY);
+		bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
 	}
 	//else nothing to do
 	return 0;
@@ -354,7 +354,7 @@ int kprobe__udpv6_sendmsg(struct pt_regs *ctx)
 	udpv6_key.saddr = sock.saddr;
 #endif
 
-	struct udpv6_value_t *lookedupValue = bpf_map_lookup_elem(&udpv6Map, &udpv6_key);
+	struct udpv6_value_t *lookedupValue = bpf_map_lookup_elem(&udpv6_map, &udpv6_key);
 	u64 pid = bpf_get_current_pid_tgid() >> 32;
 	if (lookedupValue == NULL || lookedupValue->pid != pid) {
 		struct udpv6_value_t udpv6_value={0};
@@ -362,7 +362,7 @@ int kprobe__udpv6_sendmsg(struct pt_regs *ctx)
 		bpf_get_current_comm(&udpv6_value.comm, sizeof(udpv6_value.comm));
 		udpv6_value.pid = pid;
 		udpv6_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
-		bpf_map_update_elem(&udpv6Map, &udpv6_key, &udpv6_value, BPF_ANY);
+		bpf_map_update_elem(&udpv6_map, &udpv6_key, &udpv6_value, BPF_ANY);
 	}
 	//else nothing to do
 	return 0;
@@ -377,8 +377,8 @@ int kprobe__inet_dgram_connect(struct pt_regs *ctx)
 	u64 pid_tgid = bpf_get_current_pid_tgid();
 	u64 skp = (u64)skt;
 	u64 sa = (u64)saddr;
-	bpf_map_update_elem(&tcpsock, &pid_tgid, &skp, BPF_ANY);
-	bpf_map_update_elem(&icmpsock, &pid_tgid, &sa, BPF_ANY);
+	bpf_map_update_elem(&tcpv4_sock, &pid_tgid, &skp, BPF_ANY);
+	bpf_map_update_elem(&icmp_sock, &pid_tgid, &sa, BPF_ANY);
 	return 0;
 }
 
@@ -386,9 +386,9 @@ SEC("kretprobe/inet_dgram_connect")
 int kretprobe__inet_dgram_connect(int retval)
 {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
-	u64 *skp = bpf_map_lookup_elem(&tcpsock, &pid_tgid);
+	u64 *skp = bpf_map_lookup_elem(&tcpv4_sock, &pid_tgid);
 	if (skp == NULL) { goto out; }
-	u64 *sap = bpf_map_lookup_elem(&icmpsock, &pid_tgid);
+	u64 *sap = bpf_map_lookup_elem(&icmp_sock, &pid_tgid);
 	if (sap == NULL) { goto out; }
 
 	struct sock *sk=NULL;
@@ -437,7 +437,7 @@ int kretprobe__inet_dgram_connect(int retval)
 		}
 
 		if (proto == IPPROTO_UDP){
-			bpf_map_update_elem(&udpMap, &udp_key, &udp_value, BPF_ANY);
+			bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
 		}
 	} else if (fam == AF_INET6){
 		struct sockaddr_in6 *ska;
@@ -471,25 +471,25 @@ int kretprobe__inet_dgram_connect(int retval)
 		}
 
 		if (proto == IPPROTO_UDP){
-			bpf_map_update_elem(&udpv6Map, &udpv6_key, &udp_value, BPF_ANY);
+			bpf_map_update_elem(&udpv6_map, &udpv6_key, &udp_value, BPF_ANY);
 		}
 	}
 	//if (proto == IPPROTO_UDP && type == SOCK_DGRAM && udp_key.dport == 1025){
 	//	udp_key.dport = 0;
 	//	udp_key.sport = 0;
-	//	bpf_map_update_elem(&icmpMap, &udp_key, &udp_value, BPF_ANY);
+	//	bpf_map_update_elem(&icmpv4_map, &udp_key, &udp_value, BPF_ANY);
 	//}
 	//else if (proto == IPPROTO_UDP && type == SOCK_DGRAM && udp_key.dport != 1025){
-	//	bpf_map_update_elem(&icmpMap, &udp_key, &udp_value, BPF_ANY);
+	//	bpf_map_update_elem(&icmpv4_map, &udp_key, &udp_value, BPF_ANY);
 	//} else if (proto == IPPROTO_TCP && type == SOCK_RAW){
 	//	sport always 6 and dport 0
-	//	bpf_map_update_elem(&tcpMap, &udp_key, &udp_value, BPF_ANY);
+	//	bpf_map_update_elem(&tcpv4_map, &udp_key, &udp_value, BPF_ANY);
 	//}
 
 	return 0;
 out:
-	bpf_map_delete_elem(&tcpsock, &pid_tgid);
-	bpf_map_delete_elem(&icmpsock, &pid_tgid);
+	bpf_map_delete_elem(&tcpv4_sock, &pid_tgid);
+	bpf_map_delete_elem(&icmp_sock, &pid_tgid);
 
 	return 0;
 };
@@ -536,13 +536,13 @@ int kprobe__iptunnel_xmit(struct pt_regs *ctx)
 	bpf_probe_read(&udp_key.saddr, sizeof(udp_key.saddr), &src);
 	bpf_probe_read(&udp_key.daddr, sizeof(udp_key.daddr), &dst);
 
-	struct udp_value_t *lookedupValue = bpf_map_lookup_elem(&udpMap, &udp_key);
+	struct udp_value_t *lookedupValue = bpf_map_lookup_elem(&udpv4_map, &udp_key);
 	u64 pid = bpf_get_current_pid_tgid() >> 32;
 	if (lookedupValue == NULL || lookedupValue->pid != pid) {
 		bpf_get_current_comm(&udp_value.comm, sizeof(udp_value.comm));
 		udp_value.pid = pid;
 		udp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
-		bpf_map_update_elem(&udpMap, &udp_key, &udp_value, BPF_ANY);
+		bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
 	}
 
 	return 0;
