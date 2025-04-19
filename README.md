@@ -5,7 +5,17 @@ Network monitoring tool intended to export or display info about both
 functioning and blocked network connections, with associated process/cgroup
 information, as well as traffic counters on those.
 
+Idea here is to have a minimally intrusive non-interactive window into network
+access attempts for systemd cgroups on the machine, to easily spot anything
+blocked or unexpected.
+
 It's a work in progress, not supposed to be functional just yet.
+
+Table of Contents
+
+- [Technical details](#hdr-technical_details)
+- [Requirements](#hdr-requirements)
+- [Links](#hdr-links)
 
 Repository URLs:
 
@@ -14,6 +24,7 @@ Repository URLs:
 - <https://fraggod.net/code/git/linux-ebpf-connection-overseer>
 
 
+<a name=hdr-technical_details></a>
 # Technical details
 
 Intended to consists of two components:
@@ -37,6 +48,7 @@ reading data from those eBPF map file descriptors.
 [netatop-bpf]: https://github.com/bytedance/netatop-bpf
 
 
+<a name=hdr-requirements></a>
 # Requirements
 
 Build requires: make, clang, llvm, and kernel headers (e.g. kernel-devel package).
@@ -57,9 +69,15 @@ After that, `make` should produce `leco-ebpf-load` eBPF loader binary.\
 There's no userspace script and .service file to use it with yet.
 
 
+<a name=hdr-links></a>
 # Links
 
 - [OpenSnitch] - GUI for interactive firewall setup when new connections are detected.
 - [netatop-bpf] - eBPF-based extension for [atop tool] to display per-process network traffic.
+- [systemd-cgroup-nftables-policy-manager] - user-session cgroup-based firewall configuration helper.
+- [cgroup-skb.nonet.c] - very simple eBPF to block per-cgroup egress network access.
 
 [atop tool]: https://www.atoptool.nl/
+[systemd-cgroup-nftables-policy-manager]:
+  https://github.com/mk-fg/systemd-cgroup-nftables-policy-manager
+[cgroup-skb.nonet.c]: https://github.com/mk-fg/fgtk/blob/master/bpf/cgroup-skb.nonet.c
