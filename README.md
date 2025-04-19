@@ -33,7 +33,8 @@ Intended to consists of two components:
   that only loads eBPF blob into kernel and stores file descriptors of all
   data maps in systemd service [File Descriptor Store], or exits if it's done already.
 
-    Requires elevated privileges, intended to be run as `ExecStartPre=+...` command.
+    Requires elevated privileges, intended to be run as `ExecStartPre=+...` command.\
+    When service stops, file descriptors get closed, which cleans up eBPFs as well.
 
 - Unprivileged python script that uses eBPF map file descriptors to monitor for
   required data and export it somewhere in a nice way (e.g. warnings or UI overlay).
