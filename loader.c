@@ -75,7 +75,7 @@ int main(int argc, char **argv) {
 		snprintf(opt_pin_links, sizeof(opt_pin_links), "%s/links", opt_pin); }
 	int n, err_exit = 1;
 
-	// Check if eBPF is already loaded
+	// Check if eBPFs are already loaded
 	char **fd_names;
 	int fd_n = opt_test ? 0 : sd_listen_fds_with_names(false, &fd_names);
 	if (fd_n < 0) E(1, "sd_listen_fds check failed");
@@ -83,10 +83,13 @@ int main(int argc, char **argv) {
 		if (!strcmp(fd_names[n], fd_version_check)) break;
 	if (n < fd_n) { P("sd_listen_fds appears to be all-good, exiting"); return 0; }
 	else if (fd_n > 0) {
-		P("sd_listen_fds version mismatch, re-initializing eBPF");
-		for (n = 0; n < fd_n; n++) close(SD_LISTEN_FDS_START + n); }
+		P("sd_listen_fds version mismatch, re-initializing eBPFs");
+		for (n = 0; n < fd_n; n++)
+			if (sd_notifyf( false, "FDSTOREREMOVE=1\nFDNAME=%s",
+					fd_names[n] ) <= 0 || close(SD_LISTEN_FDS_START + n))
+				E(1, "sd_listen_fds fd-cleanup failed [ %s ]", fd_names[n]); }
 
-	// Init/load/attach eBPF and maps
+	// Init/load/attach eBPFs and maps
 	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	if (opt_verbose) libbpf_set_print(libbpf_print_fn);
 	struct ebpf *skel = ebpf__open_and_load();
@@ -94,7 +97,7 @@ int main(int argc, char **argv) {
 	if (strlen(opt_pin)) {
 		if ( !bpf_object__pin_programs(skel->obj, opt_pin)
 				&& !bpf_object__pin_maps(skel->obj, opt_pin_maps) )
-			{ P("Pinned eBPF programs/maps to [ %s ]", opt_pin); }
+			P("Pinned eBPF programs/maps to [ %s ]", opt_pin);
 		else EC("Failed to pin eBPF progs/maps to [ %s ]", opt_pin); }
 
 	// Store file descriptors with systemd - prog attachment links and maps
