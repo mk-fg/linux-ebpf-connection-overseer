@@ -1,0 +1,13 @@
+[Unit]
+Before=network-pre.target network.target
+
+[Service]
+Type=notify
+NotifyAccess=exec
+FileDescriptorStoreMax=16
+
+ExecStartPre=+leco-ebpf-load
+ExecStart=sleep 120
+
+[Install]
+WantedBy=multi-user.target

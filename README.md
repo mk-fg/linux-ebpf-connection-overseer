@@ -27,13 +27,14 @@ Intended to consists of two components:
 - Unprivileged python script that uses eBPF map file descriptors to monitor for
   required data and export it somewhere in a nice way (e.g. warnings or UI overlay).
 
-It's kinda similar to [OpenSnitch project] and is based on eBPF code from there,
-but with much simpler non-interactive read-only scope, and no extra access beyond
-reading data from those eBPF file descriptors.
+It's kinda similar to [OpenSnitch] and [netatop-bpf] projects (and is partly based
+on those), with simple non-interactive read-only scope, and no extra access beyond
+reading data from those eBPF map file descriptors.
 
 [eBPF]: https://docs.ebpf.io/
 [File Descriptor Store]: https://systemd.io/FILE_DESCRIPTOR_STORE/
-[OpenSnitch project]: https://github.com/evilsocket/opensnitch
+[OpenSnitch]: https://github.com/evilsocket/opensnitch
+[netatop-bpf]: https://github.com/bytedance/netatop-bpf
 
 
 # Requirements
@@ -54,3 +55,11 @@ CONFIG_KPROBE_EVENTS=y
 Run `git submodule init && git submodule update` first to fetch libbpf/bpftool dependencies.\
 After that, `make` should produce `leco-ebpf-load` eBPF loader binary.\
 There's no userspace script and .service file to use it with yet.
+
+
+# Links
+
+- [OpenSnitch] - GUI for interactive firewall setup when new connections are detected.
+- [netatop-bpf] - eBPF-based extension for [atop tool] to display per-process network traffic.
+
+[atop tool]: https://www.atoptool.nl/

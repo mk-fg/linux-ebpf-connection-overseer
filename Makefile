@@ -1,5 +1,6 @@
 # Makefile for eBPF loader binary from opensnitch/Makefile
 
+# XXX: check if libbpf can replace those
 KERNEL_DIR := $(shell \
 	dir=/usr/src/linux dir_chk=$$dir/include; \
 	[ -d "$$dir_chk" ] || dir=/lib/modules/`uname -r`/source dir_chk=$$dir; \
@@ -9,7 +10,7 @@ KERNEL_HEADERS := /usr/src/linux-headers-$(shell uname -r)/
 
 CC := clang
 LLC := llc
-LLVM_STRIP := llvm-strip
+STRIP := llvm-strip
 
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),x86_64)
@@ -22,7 +23,7 @@ else ifeq ($(ARCH),aarch64)
 	ARCH := arm64
 endif
 ifeq ($(ARCH),arm)
-	EBPF_EXTRA_FLAGS := "-D__LINUX_ARM_ARCH__=7"
+	EBPF_EXTRA_CFLAGS := "-D__LINUX_ARM_ARCH__=7"
 endif
 
 EBPF_CFLAGS = -I. \
@@ -39,7 +40,7 @@ EBPF_CFLAGS = -I. \
 	-I$(KERNEL_DIR)/tools/testing/selftests/bpf/ \
 	-D__KERNEL__ -D__BPF_TRACING__ -Wno-unused-value -Wno-pointer-sign \
 	-D__TARGET_ARCH_$(ARCH) -Wno-compare-distinct-pointer-types \
-	$(EBPF_EXTRA_FLAGS) \
+	$(EBPF_EXTRA_CFLAGS) \
 	-Wunused \
 	-Wno-unused-value \
 	-Wno-gnu-variable-sized-type-not-at-end \
@@ -50,9 +51,11 @@ EBPF_CFLAGS = -I. \
 	-fno-stack-protector \
 	-fcf-protection \
 	-g -O2 -emit-llvm
+EBPF_STRIP := $(STRIP)
 
-APP_CFLAGS := -g -Wall -Ibuild
-APP_LDFLAGS := $(LDFLAGS) $(EXTRA_LDFLAGS)
+APP_CFLAGS := -Wall -Ibuild $(APP_EXTRA_CFLAGS)
+APP_LDFLAGS := $(LDFLAGS) $(APP_EXTRA_LDFLAGS)
+APP_STRIP := $(STRIP)
 
 
 all: leco-ebpf-load
@@ -86,10 +89,11 @@ build/ebpf.bc: ebpf.c | build build/libbpf.a
 
 build/ebpf.o: build/ebpf.bc $(wildcard build/bpf/*.[ch]) | build
 	$(LLC) -march=bpf -mcpu=generic -filetype=obj -o $@ $<
-	$(LLVM_STRIP) -g $@
+	$(EBPF_STRIP) -g $@
 
 build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
 	./build/bpftool/bootstrap/bpftool gen skeleton $< > $@
 
 leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
-	$(CC) $< build/libbpf.a $(APP_CFLAGS) $(ALL_LDFLAGS) -lelf -lz -o $@
+	$(CC) $< build/libbpf.a $(APP_CFLAGS) $(APP_LDFLAGS) -lelf -lz -lsystemd -o $@
+	$(APP_STRIP) $@
