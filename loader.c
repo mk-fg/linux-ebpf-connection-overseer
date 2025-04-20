@@ -56,7 +56,7 @@ void parse_opts( int argc, char *argv[],
 		{"verbose", no_argument, NULL, 2},
 		{"pin", required_argument, NULL, 3},
 		{"pin-fdstore", no_argument, NULL, 4} };
-	while ((ch = getopt_long(argc, argv, ":hvtp:", opt_list, NULL)) != -1) switch (ch) {
+	while ((ch = getopt_long(argc, argv, ":hvp:", opt_list, NULL)) != -1) switch (ch) {
 		case 'h': case 1: usage(0);
 		case 'v': case 2: *opt_verbose = true; break;
 		case 'p': case 3: *opt_pin = optarg; break;
@@ -84,7 +84,7 @@ int main(int argc, char **argv) {
 	// Check if eBPFs are already loaded/pinned
 	if (!pin_mode) {
 		// Note: systemd-257 does not pass fds and LISTEN_FDS to ExecStartPre=+...
-		// So there is no way to tell if eBPFs are already loaded without pins above
+		// So there's no good way to tell if eBPFs are already loaded without pins above
 		// See https://github.com/systemd/systemd/issues/37192 for details
 		char **fd_names;
 		int fd_n = sd_listen_fds_with_names(false, &fd_names);
@@ -107,11 +107,11 @@ int main(int argc, char **argv) {
 			if ( access(pin, F_OK) ||
 					access(opt_pin_maps, F_OK) || access(opt_pin_links, F_OK) ) {
 				P("Pinned eBPF path does not match current progs/maps, replacing it");
-				if (strncmp(opt_pin, "/sys/fs/bpf/", 12))
+				if (strncmp(opt_pin, "/sys/fs/bpf/", 12)) // to avoid "rm -rf /usr" or such
 					E(1, "eBPF pins path to remove/replace must start with /sys/fs/bpf/");
 				extern char *environ[];
-				if (posix_spawnp( NULL, "rm",
-						NULL, NULL, (char*[]){"rm", "-rf", "--", opt_pin, NULL}, environ ))
+				if (posix_spawnp( NULL, "rm", NULL, NULL,
+						(char*[]){"rm", "-rf", "--", opt_pin, NULL}, environ ))
 					E(1, "Failed to remove old-version bpf-pins dir: %s", pin);
 				wait(NULL); }
 			else if (opt_pin_fdstore) bpf_init = false;
@@ -132,7 +132,7 @@ int main(int argc, char **argv) {
 		// Attach eBPF programs, store/pin links
 		// It's not enough to hold program fds open for them to work, but enough
 		//  to hold link fds, and pinning those with version is useful for later checks.
-
+		// There's no bpf_object__pin_links to pin them all automatically, not sure why.
 		n = 0; struct bpf_program *prog; struct bpf_link *link;
 		bpf_object__for_each_program(prog, skel->obj) {
 			n++; name = bpf_program__name(prog);
@@ -148,7 +148,8 @@ int main(int argc, char **argv) {
 					opt_pin_links, name, fd_version ) <= 0 || bpf_link__pin(link, pin) )
 				EC("Failed to pin prog-link #%d [ %s ] to [ %s ]", n, name, pin); }
 
-		if (!pin_mode) { // store maps with systemd fdstore
+		// Store eBPF maps with systemd fdstore
+		if (!pin_mode) {
 			n = 0; struct bpf_map *map;
 			bpf_object__for_each_map(map, skel->obj) {
 				n++; name = bpf_map__name(map); fd = bpf_map__fd(map);
@@ -157,7 +158,7 @@ int main(int argc, char **argv) {
 						"FDSTORE=1\nFDPOLL=0\nFDNAME=%s_v%d", name, fd_version ) <= 0)
 					EC("sd_notify fdstore failed for map #%d [ %s ]", n, name); } } }
 
-	// Clear/store only specific non-versioned maps with pin_fdstore
+	// Clear/store only specific non-versioned maps with --pin-fdstore option
 	if (pin_mode && opt_pin_fdstore) {
 		char *pin_objs[] = { "updates",
 			"tcpv4_map", "udpv4_map", "tcpv6_map", "udpv6_map" };
