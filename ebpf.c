@@ -1,9 +1,11 @@
 // eBPF here is based on opensnitch code, ideally not too mangled, so that
 //  opensnitch ebpf_prog patches can be applied here too. Last sync: aab65908 2025-04-14
 
+// XXX: test how connect-returns work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through
 // XXX: add cgroup id's to maps
 // XXX: resolve cgroup ids to names, if possible here
+// XXX: kprobe__iptunnel_xmit seem to be only for ipv4 tunnels - extend to ipv6
 
 
 // opensnitch/ebpf_prog/common_defs.h
@@ -15,6 +17,7 @@
 #include "build/bpf/bpf_tracing.h"
 
 #define MAPSIZE 12000
+#define MAPSIZE_SOCK 300
 #define debug(fmt, ...) ({ char __fmt[] = fmt; \
 	bpf_trace_printk(__fmt, sizeof(__fmt), ##__VA_ARGS__); })
 
@@ -101,6 +104,7 @@ struct sock_on_x86_32_t {
 
 
 // Add +1,+2,+3 etc. to map size helps to easier distinguish maps in bpftool's output
+#define mapid_tcpv4 1
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct tcp_key_t);
@@ -108,6 +112,7 @@ struct {
 	__uint(max_entries, MAPSIZE+1);
 } tcpv4_map SEC(".maps");
 
+#define mapid_tcpv6 2
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct tcpv6_key_t);
@@ -115,6 +120,7 @@ struct {
 	__uint(max_entries, MAPSIZE+2);
 } tcpv6_map SEC(".maps");
 
+#define mapid_udpv4 3
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct udp_key_t);
@@ -122,12 +128,14 @@ struct {
 	__uint(max_entries, MAPSIZE+3);
 } udpv4_map SEC(".maps");
 
+#define mapid_udpv6 4
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, struct udpv6_key_t);
 	__type(value, struct udpv6_value_t);
 	__uint(max_entries, MAPSIZE+4);
 } udpv6_map SEC(".maps");
+
 
 // for TCP the IP-tuple can be copied from "struct sock" only upon return from tcp_connect().
 // We stash the socket here to look it up upon return.
@@ -137,25 +145,41 @@ struct {
 	// using u64 instead of sizeof(struct sock *)
 	// to avoid pointer size related quirks on x86_32
 	__type(value, u64);
-	__uint(max_entries, 300);
+	__uint(max_entries, MAPSIZE_SOCK);
 } tcpv4_sock SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, u64);
 	__type(value, u64);
-	__uint(max_entries, 300);
+	__uint(max_entries, MAPSIZE_SOCK);
 } tcpv6_sock SEC(".maps");
 
 struct {
 	__uint(type, BPF_MAP_TYPE_HASH);
 	__type(key, u64);
 	__type(value, u64);
-	__uint(max_entries, 300);
+	__uint(max_entries, MAPSIZE_SOCK);
 } icmp_sock SEC(".maps");
+
+
+// Ring-buffer to notify userspace about updates in a poll-friendly way
+struct {
+	__uint(type, BPF_MAP_TYPE_RINGBUF);
+	__uint(max_entries, 256);
+} updates SEC(".maps");
+
+static __always_inline void map_update_notify(char map_id) {
+	char *e = bpf_ringbuf_reserve(&updates, 1, 0);
+	if (!e) return;
+	*e = map_id;
+	bpf_ringbuf_submit(e, 0);
+}
+
 
 // initializing variables with __builtin_memset() is required
 // for compatibility with bpf on kernel 4.4
+
 
 SEC("kprobe/tcp_v4_connect")
 int kprobe__tcp_v4_connect(struct pt_regs *ctx)
@@ -198,6 +222,7 @@ int kretprobe__tcp_v4_connect(struct pt_regs *ctx)
 	tcp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 	bpf_get_current_comm(&tcp_value.comm, sizeof(tcp_value.comm));
 	bpf_map_update_elem(&tcpv4_map, &tcp_key, &tcp_value, BPF_ANY);
+	map_update_notify(mapid_tcpv4);
 
 	bpf_map_delete_elem(&tcpv4_sock, &pid_tgid);
 	return 0;
@@ -240,8 +265,10 @@ int kretprobe__tcp_v6_connect(struct pt_regs *ctx)
 	tcpv6_key.daddr = sock.daddr;
 	tcpv6_key.saddr = sock.saddr;
 #else
-	bpf_probe_read(&tcpv6_key.daddr, sizeof(tcpv6_key.daddr), &sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32);
-	bpf_probe_read(&tcpv6_key.saddr, sizeof(tcpv6_key.saddr), &sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
+	bpf_probe_read(&tcpv6_key.daddr,
+		sizeof(tcpv6_key.daddr), &sk->__sk_common.skc_v6_daddr.in6_u.u6_addr32);
+	bpf_probe_read(&tcpv6_key.saddr,
+		sizeof(tcpv6_key.saddr), &sk->__sk_common.skc_v6_rcv_saddr.in6_u.u6_addr32);
 #endif
 
 	struct tcpv6_value_t tcpv6_value={0};
@@ -250,10 +277,12 @@ int kretprobe__tcp_v6_connect(struct pt_regs *ctx)
 	tcpv6_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 	bpf_get_current_comm(&tcpv6_value.comm, sizeof(tcpv6_value.comm));
 	bpf_map_update_elem(&tcpv6_map, &tcpv6_key, &tcpv6_value, BPF_ANY);
+	map_update_notify(mapid_tcpv6);
 
 	bpf_map_delete_elem(&tcpv6_sock, &pid_tgid);
 	return 0;
 };
+
 
 SEC("kprobe/udp_sendmsg")
 int kprobe__udp_sendmsg(struct pt_regs *ctx)
@@ -303,6 +332,7 @@ int kprobe__udp_sendmsg(struct pt_regs *ctx)
 		udp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 		bpf_get_current_comm(&udp_value.comm, sizeof(udp_value.comm));
 		bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
+		map_update_notify(mapid_udpv4);
 	}
 	//else nothing to do
 	return 0;
@@ -363,10 +393,12 @@ int kprobe__udpv6_sendmsg(struct pt_regs *ctx)
 		udpv6_value.pid = pid;
 		udpv6_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 		bpf_map_update_elem(&udpv6_map, &udpv6_key, &udpv6_value, BPF_ANY);
+		map_update_notify(mapid_udpv6);
 	}
 	//else nothing to do
 	return 0;
 };
+
 
 SEC("kprobe/inet_dgram_connect")
 int kprobe__inet_dgram_connect(struct pt_regs *ctx)
@@ -438,6 +470,7 @@ int kretprobe__inet_dgram_connect(int retval)
 
 		if (proto == IPPROTO_UDP){
 			bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
+			map_update_notify(mapid_udpv4);
 		}
 	} else if (fam == AF_INET6){
 		struct sockaddr_in6 *ska;
@@ -472,6 +505,7 @@ int kretprobe__inet_dgram_connect(int retval)
 
 		if (proto == IPPROTO_UDP){
 			bpf_map_update_elem(&udpv6_map, &udpv6_key, &udp_value, BPF_ANY);
+			map_update_notify(mapid_udpv6);
 		}
 	}
 	//if (proto == IPPROTO_UDP && type == SOCK_DGRAM && udp_key.dport == 1025){
@@ -493,6 +527,7 @@ out:
 
 	return 0;
 };
+
 
 SEC("kprobe/iptunnel_xmit")
 int kprobe__iptunnel_xmit(struct pt_regs *ctx)
@@ -543,6 +578,7 @@ int kprobe__iptunnel_xmit(struct pt_regs *ctx)
 		udp_value.pid = pid;
 		udp_value.uid = bpf_get_current_uid_gid() & 0xffffffff;
 		bpf_map_update_elem(&udpv4_map, &udp_key, &udp_value, BPF_ANY);
+		map_update_notify(mapid_udpv4);
 	}
 
 	return 0;

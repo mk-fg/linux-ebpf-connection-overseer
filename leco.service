@@ -6,8 +6,10 @@ Type=notify
 NotifyAccess=exec
 FileDescriptorStoreMax=32
 
-ExecStartPre=+leco-ebpf-load
-ExecStart=sleep 120
+# ExecStartPre= has issues tracking fds, so --pin in required here
+# See https://github.com/systemd/systemd/issues/37192 for details
+ExecStartPre=+leco-ebpf-load --pin /sys/fs/bpf/leco --pin-fdstore
+ExecStart=leco
 
 [Install]
 WantedBy=multi-user.target
