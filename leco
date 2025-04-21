@@ -38,14 +38,13 @@ class BPFMapIDRingBuffer:
 	def close(self):
 		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
 
-	def _ev_handler( self, ctx, ev, n, _fmt='<BQ16s16sHHII16s',
-			_fields='ct ns saddr daddr sport dport pid uid comm'.split(), _ct_map=[ None,
-				('tcp', so.AddressFamily.AF_INET, 4), ('tcp', so.AddressFamily.AF_INET6, 16),
-				('udp', so.AddressFamily.AF_INET, 4), ('udp', so.AddressFamily.AF_INET6, 16) ] ):
+	def _ev_handler( self, ctx, ev, n,
+			_fmt='<BQ16s16sHHII16s', _ct_proto='tcp udp x'.split(),
+			_fields='ct ns saddr daddr sport dport pid uid comm'.split(),
+			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
 		self.updates.append(ev := adict(zip( _fields,
 			struct.unpack_from(_fmt, bytes((ct.c_char*n).from_address(ev))) )))
-		ev.proto, ev.af, n = _ct_map[ev.ct]
-		# p(ev.saddr, ev.daddr)
+		ev.proto, (ev.af, n) = _ct_proto[(ev.ct-1)//2], _ct_af[ev.ct%2]
 		for k in 'saddr', 'daddr': ev[k] = ip.ip_address(ev[k][:n])
 		ev.comm = ev.comm.rstrip(b'\0').decode()
 		return 0
