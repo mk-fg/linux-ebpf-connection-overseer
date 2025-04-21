@@ -3,17 +3,13 @@
 // XXX: test how connect-returns work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through
 // XXX: add cgroup id's to maps, resolve cgroup ids to names here if possible
+//   https://docs.ebpf.io/linux/helper-function/bpf_sk_cgroup_id/
+// XXX: check socket helper funcs for simpler/reliable ways to get socket info
 
 #define KBUILD_MODNAME "leco"
 
 #include <linux/version.h>
-#include <linux/sched.h>
-#include <linux/ptrace.h>
-#include <uapi/linux/bpf.h>
-#include <uapi/linux/tcp.h>
-#include <net/sock.h>
 #include <net/udp_tunnel.h>
-#include <net/inet_sock.h>
 
 #include "build/bpf/bpf_helpers.h"
 #include "build/bpf/bpf_tracing.h"
@@ -43,7 +39,7 @@ struct conn_t { // ~70B
 
 struct {
 	__uint(type, BPF_MAP_TYPE_ARRAY);
-	__type(key, unsigned int);
+	__type(key, u32);
 	__type(value, struct conn_t);
 	__uint(max_entries, CONN_TABLE_SIZE);
 } conn_table SEC(".maps");
@@ -57,7 +53,7 @@ struct {
 // Connection IP-tuple can be copied from "struct sock(et)"
 //  only upon return from tcp_connect(), so socket pointers are cached here.
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, u64);
 	__type(value, u64);
 	__uint(max_entries, 300);
@@ -67,12 +63,12 @@ struct {
 // First sendmsg should bind socket, so saddr/sport are redundant with sk pointer.
 struct cache_udp_key {
 	u64 sk;
-	u128 daddr;
 	u16 dport;
+	u128 daddr;
 } __attribute__((packed));
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, struct cache_udp_key);
 	__type(value, u64);
 	__uint(max_entries, 200);
@@ -89,7 +85,7 @@ struct cache_tun6_value {
 } __attribute__((packed));
 
 struct {
-	__uint(type, BPF_MAP_TYPE_HASH);
+	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, u64);
 	__type(value, struct cache_tun6_value);
 	__uint(max_entries, 100);
@@ -131,6 +127,7 @@ int kretprobe__tcp_v4_connect(struct pt_regs *ctx) {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
 	struct sock **skp = bpf_map_lookup_elem(&cache_conn, &pid_tgid);
 	if (!skp) return 0;
+	bpf_map_delete_elem(&cache_conn, &pid_tgid);
 	struct conn_t conn = {.ct = CT_TCP4}; struct sock *sk = *skp;
 	bpf_probe_read(&conn.sport, 2, &sk->__sk_common.skc_num);
 	bpf_probe_read(&conn.dport, 2, &sk->__sk_common.skc_dport);
@@ -138,7 +135,6 @@ int kretprobe__tcp_v4_connect(struct pt_regs *ctx) {
 	bpf_probe_read(&conn.saddr, 4, &sk->__sk_common.skc_rcv_saddr);
 	bpf_probe_read(&conn.daddr, 4, &sk->__sk_common.skc_daddr);
 	conn_push(pid_tgid, conn);
-	bpf_map_delete_elem(&cache_conn, &pid_tgid);
 	return 0;
 }
 
@@ -155,6 +151,7 @@ int kretprobe__tcp_v6_connect(struct pt_regs *ctx) {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
 	struct sock **skp = bpf_map_lookup_elem(&cache_conn, &pid_tgid);
 	if (!skp) return 0;
+	bpf_map_delete_elem(&cache_conn, &pid_tgid);
 	struct conn_t conn = {.ct = CT_TCP6}; struct sock *sk = *skp;
 	bpf_probe_read(&conn.sport, 2, &sk->__sk_common.skc_num);
 	bpf_probe_read(&conn.dport, 2, &sk->__sk_common.skc_dport);
@@ -162,7 +159,6 @@ int kretprobe__tcp_v6_connect(struct pt_regs *ctx) {
 	bpf_probe_read(&conn.saddr, 16, &sk->__sk_common.skc_v6_rcv_saddr);
 	bpf_probe_read(&conn.daddr, 16, &sk->__sk_common.skc_v6_daddr);
 	conn_push(pid_tgid, conn);
-	bpf_map_delete_elem(&cache_conn, &pid_tgid);
 	return 0;
 }
 
@@ -328,6 +324,7 @@ int kretprobe__udp_tunnel6_xmit_skb(struct pt_regs *ctx) {
 	u64 pid_tgid = bpf_get_current_pid_tgid();
 	struct cache_tun6_value *eps = bpf_map_lookup_elem(&cache_tun6, &pid_tgid);
 	if (!eps) return 0;
+	bpf_map_delete_elem(&cache_tun6, &pid_tgid);
 	struct conn_t conn = {
 		.ct = CT_UDP6,
 		.sport = eps->sport,
@@ -353,7 +350,6 @@ int kretprobe__udp_tunnel6_xmit_skb(struct pt_regs *ctx) {
 	bpf_map_update_elem(&cache_udp, &ck, &tunid, BPF_ANY);
 
 	conn_push(0, conn);
-	bpf_map_delete_elem(&cache_tun6, &pid_tgid);
 	return 0;
 }
 

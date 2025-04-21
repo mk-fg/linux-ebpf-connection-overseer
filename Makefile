@@ -41,11 +41,8 @@ EBPF_CFLAGS = -I. \
 	-D__TARGET_ARCH_$(ARCH) -Wno-compare-distinct-pointer-types \
 	$(EBPF_EXTRA_CFLAGS) \
 	-Wunused \
-	-Wno-unused-value \
 	-Wno-gnu-variable-sized-type-not-at-end \
 	-Wno-address-of-packed-member \
-	-Wno-tautological-compare \
-	-Wno-unknown-warning-option \
 	-Wno-duplicate-decl-specifier \
 	-fno-stack-protector \
 	-fcf-protection \
