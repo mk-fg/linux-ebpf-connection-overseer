@@ -1,6 +1,7 @@
 #!/usr/bin/env python
 
-import os, sys, re, struct, platform, time, socket as so, ctypes as ct
+import ctypes as ct, socket as so, ipaddress as ip
+import os, sys, re, struct, platform, time
 
 
 class adict(dict):
@@ -8,15 +9,16 @@ class adict(dict):
 		super().__init__(*args, **kws)
 		self.__dict__ = self
 
+p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
 err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
 
 
 class BPFMapIDRingBuffer:
 	_libbpf = None # needed for ringbuf_process_ring asm to process data
-	_rb_handler_t = ct.CFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_void_p, ct.c_size_t)
 	class _rb_struct(ct.Structure): pass
-	map_names = dict(enumerate('tcpv4 tcpv6 udpv4 udpv6'.split(), 1))
+	_rb_handler_t = ct.CFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_void_p, ct.c_size_t)
+
 
 	def __init__(self, fd=None, path=None):
 		if not (cls := BPFMapIDRingBuffer)._libbpf:
@@ -27,7 +29,7 @@ class BPFMapIDRingBuffer:
 			lib.ring_buffer__poll.argtypes = ct.POINTER(self._rb_struct), ct.c_int
 			lib.ring_buffer__poll.restype = ct.c_int
 			lib.libbpf_set_strict_mode(0xffffffff) # LIBBPF_STRICT_ALL
-		self.updates, self.handler = set(), self._rb_handler_t(self._ev_handler)
+		self.updates, self.handler = list(), self._rb_handler_t(self._ev_handler)
 		self.rb = self._libbpf.ring_buffer__new(fd, self.handler, None, None)
 		if not self.rb: raise OSError('Failed to init libbpf ring-buffer struct')
 
@@ -36,17 +38,22 @@ class BPFMapIDRingBuffer:
 	def close(self):
 		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
 
-	def _ev_handler(self, ctx, ev, n):
-		if n == 1:
-			ev = ct.cast(ev, ct.POINTER(ct.c_char))[0][0]
-			if bmap := self.map_names.get(ev): self.updates.add(bmap); return 0
-		p_err(f'ERROR: BPFMapIDRingBuffer - unexpected event size/value {n} / {ev}')
+	def _ev_handler( self, ctx, ev, n, _fmt='<BQ16s16sHHII16s',
+			_fields='ct ns saddr daddr sport dport pid uid comm'.split(), _ct_map=[ None,
+				('tcp', so.AddressFamily.AF_INET, 4), ('tcp', so.AddressFamily.AF_INET6, 16),
+				('udp', so.AddressFamily.AF_INET, 4), ('udp', so.AddressFamily.AF_INET6, 16) ] ):
+		self.updates.append(ev := adict(zip( _fields,
+			struct.unpack_from(_fmt, bytes((ct.c_char*n).from_address(ev))) )))
+		ev.proto, ev.af, n = _ct_map[ev.ct]
+		# p(ev.saddr, ev.daddr)
+		for k in 'saddr', 'daddr': ev[k] = ip.ip_address(ev[k][:n])
+		ev.comm = ev.comm.rstrip(b'\0').decode()
 		return 0
 
 	def wait(self, timeout=1.0):
 		self.updates.clear()
 		if self._libbpf.ring_buffer__poll(
-			self.rb, int(timeout*1000) ) <= 0: return # timeout/error
+			self.rb, int(timeout*1000) ) <= 0: return () # timeout/error
 		return tuple(self.updates)
 
 
@@ -80,8 +87,7 @@ def main(argv=None):
 
 	ts0 = time.monotonic()
 	while True:
-		updates = rb.wait(60)
-		print(time.monotonic() - ts0, updates, flush=True)
+		for ev in rb.wait(60): p(f'{time.monotonic() - ts0:.1f} {ev}')
 		# rb.close(); break
 
 if __name__ == '__main__': sys.exit(main())

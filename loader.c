@@ -32,18 +32,18 @@ void parse_opts_usage(int err, char *cmd) {
 "Usage: %s [-h|--help] [-v|--verbose] [opts...]\n\n"
 "Loads bundled network-monitoring eBPF programs, sets up maps for them.\n"
 "Intended to persist eBPF objects in one of two ways:\n\n"
-"- Default: store them as as fds in systemd File Descriptor Store.\n"
-"  For running from ExecStartPre=+... line in a systemd service file,\n"
-"    (which also has Type=notify NotifyAccess=exec and FileDescriptorStoreMax=32).\n"
+"- Default: store them as fds in systemd File Descriptor Store.\n"
+"  Intended for running from ExecStartPre=+... line in a systemd service file\n"
+"   (which also has Type=notify NotifyAccess=exec and FileDescriptorStoreMax=32).\n"
 "  Detects running under systemd via sd_notify environment variables.\n"
 "  Exits with error if not running under systemd in this mode.\n"
 "  It does not work, at least with current systemd-257.5 - see issue-37192 there.\n"
-"  Adding --pin-fdstore option can be used as a workaround.\n\n"
+"  Pinning with --pin-fdstore option can be used as a workaround.\n\n"
 "- Pin all objects to bpffs, refreshing dir there as-needed (-p/--pin option).\n\n"
 "If eBPF objects are already setup and stored/pinned, exits without doing anything.\n\n"
 "  -v/--verbose - enable verbose logging about systemd and libbpf interactions to stderr.\n"
 "  -p/--pin <path> - pin eBPF progs/maps/links in dir on bpffs. Example: /sys/fs/bpf/leco\n"
-"  --pin-fdstore - replace pinned eBPF maps in systemd fdstore without version suffix.\n"
+"  --pin-fdstore - store/replace pinned eBPF maps in systemd fdstore without version suffix.\n"
 "\n", cmd );
 	exit(err); }
 #define usage(err) parse_opts_usage(err, argv[0]);
@@ -160,9 +160,8 @@ int main(int argc, char **argv) {
 
 	// Clear/store only specific non-versioned maps with --pin-fdstore option
 	if (pin_mode && opt_pin_fdstore) {
-		char *pin_objs[] = { "updates",
-			"tcpv4_map", "udpv4_map", "tcpv6_map", "udpv6_map" };
-		for (n = 0; n < 5; n++) {
+		char *pin_objs[] = {"conn_table", "updates"};
+		for (n = 0; n < 2; n++) {
 			snprintf(pin, 1024, "%s/%s", opt_pin_maps, name = pin_objs[n]);
 			if ((fd = bpf_obj_get(pin)) <= 0) E(1, "Pinned obj_get failed [ %s ]", pin);
 			if (sd_notifyf(false, "FDSTOREREMOVE=1\nFDNAME=%s", name) <= 0)
