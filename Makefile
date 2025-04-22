@@ -1,5 +1,6 @@
 # Makefile for eBPF loader binary
 
+# Make sure to adjust those when building for non-running kernel
 KERNEL_DIR := $(shell \
 	dir=/usr/src/linux dir_chk=$$dir/include; \
 	[ -d "$$dir_chk" ] || dir=/lib/modules/`uname -r`/source dir_chk=$$dir; \

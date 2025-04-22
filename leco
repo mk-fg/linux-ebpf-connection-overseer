@@ -1,7 +1,11 @@
 #!/usr/bin/env python
 
+# Relevant docs:
+#  https://docs.ebpf.io/ebpf-library/libbpf/userspace/
+#  https://libbpf.readthedocs.io/en/latest/api.html
+
 import ctypes as ct, socket as so, ipaddress as ip
-import os, sys, re, struct, platform, time
+import os, sys, re, struct, errno, time
 
 
 class adict(dict):
@@ -14,40 +18,100 @@ p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
 err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
 
 
-class BPFMapIDRingBuffer:
-	_libbpf = None # needed for ringbuf_process_ring asm to process data
+class BPFError(Exception): pass
+class BPFMap:
+
 	class _rb_struct(ct.Structure): pass
+	class _map_info(ct.Structure): _align_, _fields_ = 8, (
+		list((k, ct.c_uint) for k in 'type id key value entires flags'.split())
+		+ [("name", ct.c_char * 16)] )
+	class _map_batch_opts(ct.Structure): _fields_ = [
+		('sz', ct.c_size_t), ('elem_flags', ct.c_ulonglong), ('flags', ct.c_ulonglong) ]
 	_rb_handler_t = ct.CFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_void_p, ct.c_size_t)
 
+	_libbpf = None # needed for ringbuf_process_ring asm to process data
+	@classmethod
+	def libbpf_init(self):
+		if BPFMap._libbpf: return
+		lib = BPFMap._libbpf = ct.CDLL('libbpf.so.1', use_errno=True)
+		ptr, cint, cuint, cvoid = ct.POINTER, ct.c_int, ct.c_uint, ct.c_void_p
+		lib.ring_buffer__new.argtypes = cint, self._rb_handler_t, cvoid, cvoid
+		lib.ring_buffer__new.restype = ptr(self._rb_struct)
+		lib.ring_buffer__poll.argtypes = ptr(self._rb_struct), cint
+		lib.bpf_map_get_info_by_fd.argtypes = cint, ptr(self._map_info), ptr(cuint)
+		lib.bpf_map_lookup_batch.argtypes = ( cint,
+			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(self._map_batch_opts) )
 
-	def __init__(self, fd=None, path=None):
-		if not (cls := BPFMapIDRingBuffer)._libbpf:
-			lib = cls._libbpf = ct.CDLL('libbpf.so.1', use_errno=True)
-			lib.ring_buffer__new.argtypes = (
-				ct.c_int, self._rb_handler_t, ct.c_void_p, ct.c_void_p )
-			lib.ring_buffer__new.restype = ct.POINTER(self._rb_struct)
-			lib.ring_buffer__poll.argtypes = ct.POINTER(self._rb_struct), ct.c_int
-			lib.ring_buffer__poll.restype = ct.c_int
-			lib.libbpf_set_strict_mode(0xffffffff) # LIBBPF_STRICT_ALL
-		self.updates, self.handler = list(), self._rb_handler_t(self._ev_handler)
-		self.rb = self._libbpf.ring_buffer__new(fd, self.handler, None, None)
-		if not self.rb: raise OSError('Failed to init libbpf ring-buffer struct')
+	def map_fd(self, fd=None, path=None):
+		if fd is not None: return fd
+		if not path: raise ValueError('Either bpf-map fd or path must be specified')
+		if (fd := self._libbpf.bpf_obj_get(str(path).encode())) < 0:
+			raise BPFError(f'Failed bpf-map init from path for [ {path} ]')
+		return fd
 
-	def __enter__(self): return self
-	def __exit__(self, *err): self.close()
-	def close(self):
-		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
-
-	def _ev_handler( self, ctx, ev, n,
+	def ev_parse( self, ev, o=0,
 			_fmt='<BQ16s16sHHII16s', _ct_proto='tcp udp x'.split(),
 			_fields='ct ns saddr daddr sport dport pid uid comm'.split(),
 			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
-		self.updates.append(ev := adict(zip( _fields,
-			struct.unpack_from(_fmt, bytes((ct.c_char*n).from_address(ev))) )))
+		ev = adict(zip(_fields, struct.unpack_from(_fmt, ev, offset=o)))
+		if not ev.ct: return
 		ev.proto, (ev.af, n) = _ct_proto[(ev.ct-1)//2], _ct_af[ev.ct%2]
 		for k in 'saddr', 'daddr': ev[k] = ip.ip_address(ev[k][:n])
 		ev.comm = ev.comm.rstrip(b'\0').decode()
-		return 0
+		return ev
+
+	def __enter__(self): return self
+	def __exit__(self, *err): self.close()
+	def close(self): pass
+
+class BPFMapRingTable(BPFMap):
+	# There's no good high-level API for opening maps from fds,
+	#   so using "low-level" api here, which is same thing but with less hassle.
+	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway
+
+	def __init__(self, fd=None, path=None):
+		self.libbpf_init()
+		self.fd, info_fn = self.map_fd(fd, path), self._libbpf.bpf_map_get_info_by_fd
+		info, n = self._map_info(), ct.c_uint(n0 := ct.sizeof(self._map_info))
+		if info_fn(self.fd, ct.byref(info), ct.byref(info_len)) or n.value < n or info.key != 4:
+			raise BPFError(f'libbpf bpf_map_get_info failed [fd={fd} path={path}]')
+		self.name, self.vsz, self.n = info.name.decode(), info.value, info.entires
+		self.batch_flags = self._map_batch_opts(sz=ct.sizeof(self._map_batch_opts))
+
+	def read(self, batch=64):
+		# Array batches always iterate over all entries, with all keys
+		#  always set sequentially, but values are zeroed-out for unused elements.
+		# ENOENT shouldn't happen here, but indicates that q goes beyond max_entries.
+		vals, a, b = list(), ct.pointer(ct.c_void_p()), ct.pointer(ct.c_void_p())
+		q, vb_data = ct.c_uint(), bytearray((vsz := self.vsz) * batch)
+		kb, vb = (ct.c_uint*batch)(), ct.c_char.from_buffer(vb_data)
+		kb_p, vb_p, q_p = (ct.pointer(v) for v in [kb, vb, q])
+		while c := self.n - len(vals):
+			c = q.value = min(batch, c)
+			if err := self._libbpf.bpf_map_lookup_batch( self.fd,
+					None if not vals else a, b, kb_p, vb_p, q_p, self.batch_flags ):
+				if -err != errno.ENOENT: raise BPFError('bpf_map_lookup_batch failed')
+			for n in range(q.value):
+				if not (ev := self.ev_parse(vb_data, n*vsz)): return vals
+				vals.append(ev)
+			if err or q.value < c: break
+			a, b = b, a
+		return vals
+
+class BPFMapRingBuffer(BPFMap):
+
+	def __init__(self, fd=None, path=None):
+		self.libbpf_init()
+		self.updates, self.handler = list(), self._rb_handler_t(self._ev_handler)
+		self.rb = self._libbpf.ring_buffer__new(self.map_fd(fd, path), self.handler, None, None)
+		if not self.rb: raise BPFError(f'libbpf ring_buffer__new failed [fd={fd} path={path}]')
+
+	def close(self):
+		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
+
+	def _ev_handler(self, ctx, ev, n):
+		return self.updates.append(self.ev_parse(
+			bytes((ct.c_char*n).from_address(ev)) )) or 0
 
 	def wait(self, timeout=1.0):
 		self.updates.clear()
@@ -63,6 +127,7 @@ def main(argv=None):
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.RawTextHelpFormatter,
 		description='eBPF map parser script.')
+	# XXX: add init-from-pinned-paths option instead of systemd fds
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 	sd_pid, sd_fds = (
@@ -80,13 +145,12 @@ def main(argv=None):
 		with so.socket(so.AF_UNIX, so.SOCK_DGRAM | so.SOCK_CLOEXEC) as s:
 			s.connect(sd_sock); s.sendall(b'READY=1')
 
-	rb = BPFMapIDRingBuffer(sd_fds.updates)
-	# maps = adict( (name[:-4], BPFHashMap(fd))
-	# 	for name, fd in sd_fds.items() if name.endswith('_map') )
-
-	ts0 = time.monotonic()
-	while True:
-		for ev in rb.wait(60): p(f'{time.monotonic() - ts0:.1f} {ev}')
-		# rb.close(); break
+	with ( BPFMapRingBuffer(sd_fds.updates) as rb,
+			BPFMapRingTable(sd_fds.conn_table) as table ):
+		ts0, evs = time.monotonic(), table.read()
+		p(f'[ {time.monotonic()-ts0:> 5.1f} ] --- conn_table: {len(evs)} event(s)')
+		# XXX: rb can replay old events redundant with conn_table
+		while True:
+			for ev in rb.wait(60): p(f'[ {time.monotonic()-ts0:> 5.1f} ] {ev}')
 
 if __name__ == '__main__': sys.exit(main())

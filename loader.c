@@ -119,7 +119,6 @@ int main(int argc, char **argv) {
 
 	// Init/load/attach/pin eBPFs and maps
 	struct ebpf *skel;
-	libbpf_set_strict_mode(LIBBPF_STRICT_ALL);
 	if (opt_verbose) libbpf_set_print(libbpf_print_fn);
 	if (bpf_init) {
 		if (!(skel = ebpf__open_and_load())) E(1, "Failed to open eBPF skeleton");
