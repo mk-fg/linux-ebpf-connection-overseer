@@ -5,13 +5,38 @@
 #  https://libbpf.readthedocs.io/en/latest/api.html
 
 import ctypes as ct, socket as so, ipaddress as ip, pathlib as pl
-import os, sys, re, struct, errno, time
+import os, sys, re, struct, errno, time, json, signal
 
 
 class adict(dict):
 	def __init__(self, *args, **kws):
 		super().__init__(*args, **kws)
 		self.__dict__ = self
+
+def openat2(p, mode='r', _cache=[]):
+	'More flexible open() that avoids symlink-related race-conditions'
+	# Also allows to open for writing without O_CREAT.
+	# Way to validate opened path without disallowing symlinks entirely:
+	#  p = realpath(path); validate_is_acceptable(p); file = openat2(p, no_symlinks)
+	# As of 2022-10-13 glibc has no openat2() wrapper yet, hence syscall here.
+	if not _cache:
+		def _openat2(p, flags, _syscall=ct.CDLL(None, use_errno=True).syscall):
+			args = ct.create_string_buffer(struct.pack(
+				'@QQQ', flags | os.O_NOFOLLOW, 0, res_no_symlinks := 0x04 ))
+			fd = _syscall(437, -100, str(p).encode(), args, 24)
+			if fd < 0: raise OSError(err := ct.get_errno(), os.strerror(err))
+			return fd
+		_cache.append(_openat2)
+	flags = 0
+	if 'r' in mode: flags |= os.O_RDONLY
+	if 'w' in mode: assert not flags; flags |= os.O_WRONLY
+	if '+' in mode: assert not flags; flags |= os.O_RDWR
+	if 'c' in mode: flags |= os.O_CREAT
+	if 'x' in mode: flags |= os.O_EXCL
+	if 't' in mode: flags |= os.O_TRUNC
+	if 'a' in mode: flags |= os.O_APPEND
+	mode = mode.translate(dict.fromkeys(ord(c) for c in 'ct'))
+	return open(_cache[0](p, flags | os.O_CLOEXEC), mode)
 
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
@@ -124,20 +149,51 @@ class BPFMapRingBuffer(BPFMap):
 		return tuple(self.updates)
 
 
+def stream_events(table, rb, dst, replay_limit=None):
+	# Reopening FIFO on the other end in-between events won't break the loop here
+	def _dst_write(ev):
+		ev.saddr, ev.daddr = str(ev.saddr), str(ev.daddr)
+		ev.ts = ts - (ns - ev.ns) / 1_000_000_000
+		try: dst.write(json.dumps(ev)); dst.write('\n'); dst.flush()
+		except BrokenPipeError: # pipe closed
+			if dst is sys.stdout: os.dup2(os.open(
+				os.devnull, os.O_WRONLY ), dst.fileno())
+			return True
+	ns_table, ns_cutoff, ts, ns = 0, 0, time.time(), time.monotonic_ns()
+	if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
+	for ev in sorted(table.read(), key=lambda ev: ev.ns):
+		ns_table = ev.ns
+		if ev.ns < ns_cutoff: continue
+		if _dst_write(ev): return
+	while True:
+		for ev in rb.wait(1800):
+			if ev.ns <= ns_table or ev.ns < ns_cutoff: continue
+			ts, ns = time.time(), time.monotonic_ns()
+			if _dst_write(ev): return
+
 def main(argv=None):
 	import argparse, textwrap
 	dd = lambda text: re.sub( r' \t+', ' ',
 		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
 	parser = argparse.ArgumentParser(
-		formatter_class=argparse.RawTextHelpFormatter,
-		description=dd('''
-			Script to monitor and forward eBPF events to UI components.
-			In default mode, checks systemd service env vars and uses map sockets from there.
-			Alternative is to use -p/--pin option to open/use bpffs-pinned maps.'''))
+		formatter_class=argparse.RawTextHelpFormatter, description=dd('''
+			Script to monitor and forward eBPF events to UI components as json-lines.
+			By default checks systemd service env vars,
+				uses map sockets from there and outputs stream of events to stdout.
+			Alternative is to use -p/--pin option to open/use bpffs-pinned maps.
+			Streams events from pre-populated conn_table map first and updates after that.
+			Replayed old event times are calculated using monotonic clock offset
+				from current wall-clock time, so don't take system suspend into account.'''))
+	parser.add_argument('-f', '--fifo', metavar='path', help=dd('''
+		FIFO path to use to output stream of events instead of stdout.
+		Must be pre-existing, will be reused when other side closes it,
+			always sending all stored connection table events after re-opening.'''))
 	parser.add_argument('-p', '--pin', metavar='path', help=dd('''
 		Top-level path under which all eBPF objects are pinned.
 		This script will only access objects under "map" subdirectory.
 		Typically under /sys/fs/bpf/ mountpoint. Might require privileged access.'''))
+	parser.add_argument('-r', '--replay-window', type=float, metavar='seconds',
+		help='Ignore pre-buffered events older than specified number of seconds.')
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 	if not opts.pin:
@@ -162,11 +218,13 @@ def main(argv=None):
 		bpf_rb = BPFMapRingBuffer(path=p_maps / 'updates')
 		bpf_table = BPFMapRingTable(path=p_maps / 'conn_table')
 
+	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_table as table:
-		ts0, evs = time.monotonic(), table.read()
-		p(f'[ {time.monotonic()-ts0:> 5.1f} ] --- conn_table: {len(evs)} event(s)')
-		# XXX: rb can replay old events redundant with conn_table
 		while True:
-			for ev in rb.wait(60): p(f'[ {time.monotonic()-ts0:> 5.1f} ] {ev}')
+			dst = openat2(opts.fifo, 'w') if opts.fifo else sys.stdout
+			try: stream_events(table, rb, dst, opts.replay_window)
+			finally:
+				try: opts.fifo and dst.close()
+				except BrokenPipeError: pass
 
 if __name__ == '__main__': sys.exit(main())
