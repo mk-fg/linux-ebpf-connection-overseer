@@ -10,9 +10,11 @@ FileDescriptorStoreMax=32
 User=someuser
 Environment=EV_FIFO=/run/user/1000/leco.fifo
 
+ExecStartPre=+modprobe ipv6 udp-tunnel ip6-udp-tunnel
+ExecStartPre=-+mkfifo -m666 $EV_FIFO
+
 # ExecStartPre= has issues tracking fds, so --pin in required here
 # See https://github.com/systemd/systemd/issues/37192 for details
-ExecStartPre=-+mkfifo -m666 $EV_FIFO
 ExecStartPre=+leco-ebpf-load --pin /sys/fs/bpf/leco --pin-fdstore
 ExecStart=leco-event-pipe -r 14400 -f $EV_FIFO
 
