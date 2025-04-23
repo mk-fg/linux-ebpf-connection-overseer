@@ -4,7 +4,7 @@
 #  https://docs.ebpf.io/ebpf-library/libbpf/userspace/
 #  https://libbpf.readthedocs.io/en/latest/api.html
 
-import ctypes as ct, socket as so, ipaddress as ip
+import ctypes as ct, socket as so, ipaddress as ip, pathlib as pl
 import os, sys, re, struct, errno, time
 
 
@@ -19,6 +19,7 @@ err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
 
 
 class BPFError(Exception): pass
+
 class BPFMap:
 
 	class _rb_struct(ct.Structure): pass
@@ -42,12 +43,13 @@ class BPFMap:
 		lib.bpf_map_lookup_batch.argtypes = ( cint,
 			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(self._map_batch_opts) )
 
+	fd = None
 	def map_fd(self, fd=None, path=None):
-		if fd is not None: return fd
+		if fd is not None: return fd # doesn't need to be closed later
 		if not path: raise ValueError('Either bpf-map fd or path must be specified')
 		if (fd := self._libbpf.bpf_obj_get(str(path).encode())) < 0:
 			raise BPFError(f'Failed bpf-map init from path for [ {path} ]')
-		return fd
+		self.fd = fd; return fd
 
 	def ev_parse( self, ev, o=0,
 			_fmt='<BQ16s16sHHII16s', _ct_proto='tcp udp x'.split(),
@@ -62,18 +64,19 @@ class BPFMap:
 
 	def __enter__(self): return self
 	def __exit__(self, *err): self.close()
-	def close(self): pass
+	def close(self):
+		if self.fd is not None: os.close(self.fd); self.fd = None
 
 class BPFMapRingTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
 	#   so using "low-level" api here, which is same thing but with less hassle.
-	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway
+	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway.
 
 	def __init__(self, fd=None, path=None):
 		self.libbpf_init()
 		self.fd, info_fn = self.map_fd(fd, path), self._libbpf.bpf_map_get_info_by_fd
 		info, n = self._map_info(), ct.c_uint(n0 := ct.sizeof(self._map_info))
-		if info_fn(self.fd, ct.byref(info), ct.byref(info_len)) or n.value < n or info.key != 4:
+		if info_fn(self.fd, ct.byref(info), ct.byref(n)) or n.value < n0 or info.key != 4:
 			raise BPFError(f'libbpf bpf_map_get_info failed [fd={fd} path={path}]')
 		self.name, self.vsz, self.n = info.name.decode(), info.value, info.entires
 		self.batch_flags = self._map_batch_opts(sz=ct.sizeof(self._map_batch_opts))
@@ -108,6 +111,7 @@ class BPFMapRingBuffer(BPFMap):
 
 	def close(self):
 		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
+		super().close()
 
 	def _ev_handler(self, ctx, ev, n):
 		return self.updates.append(self.ev_parse(
@@ -126,27 +130,39 @@ def main(argv=None):
 		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.RawTextHelpFormatter,
-		description='eBPF map parser script.')
-	# XXX: add init-from-pinned-paths option instead of systemd fds
+		description=dd('''
+			Script to monitor and forward eBPF events to UI components.
+			In default mode, checks systemd service env vars and uses map sockets from there.
+			Alternative is to use -p/--pin option to open/use bpffs-pinned maps.'''))
+	parser.add_argument('-p', '--pin', metavar='path', help=dd('''
+		Top-level path under which all eBPF objects are pinned.
+		This script will only access objects under "map" subdirectory.
+		Typically under /sys/fs/bpf/ mountpoint. Might require privileged access.'''))
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
-	sd_pid, sd_fds = (
-		os.environ.get(f'LISTEN_{k}', '') for k in 'PID FDNAMES'.split() )
-	if not sd_pid.isdigit() or int(sd_pid) != os.getpid():
-		parser.error('systemd env LISTEN_PID does not match this process')
-	sd_fds = (
-		adict((k[:-4], 3+n) for n, k in enumerate(sd_fds.split(':')) if k.endswith('__v1'))
-		if all(re.search(r'__v\d$', k) for k in sd_fds.split(':')) # versioned fds
-		else adict((k, 3 + n) for n, k in enumerate(sd_fds.split(':'))) )
+	if not opts.pin:
+		sd_pid, sd_fds = (
+			os.environ.get(f'LISTEN_{k}', '') for k in 'PID FDNAMES'.split() )
+		if not sd_pid.isdigit() or int(sd_pid) != os.getpid():
+			parser.error('systemd env LISTEN_PID does not match this process')
+		sd_fds = (
+			adict((k[:-4], 3+n) for n, k in enumerate(sd_fds.split(':')) if k.endswith('__v1'))
+			if all(re.search(r'__v\d$', k) for k in sd_fds.split(':')) # versioned fds
+			else adict((k, 3 + n) for n, k in enumerate(sd_fds.split(':'))) )
+		bpf_rb = BPFMapRingBuffer(sd_fds.updates)
+		bpf_table = BPFMapRingTable(sd_fds.conn_table)
+		if sd_sock := os.environ.get('NOTIFY_SOCKET'):
+			if sd_sock[0] not in ('/', '@'): parser.error('Unsupported sd_notify socket')
+			if sd_sock[0] == '@': sd_sock = '\0' + sd_sock[1:]
+			with so.socket(so.AF_UNIX, so.SOCK_DGRAM | so.SOCK_CLOEXEC) as s:
+				s.connect(sd_sock); s.sendall(b'READY=1')
 
-	if sd_sock := os.environ.get('NOTIFY_SOCKET'):
-		if sd_sock[0] not in ('/', '@'): parser.error('Unsupported sd_notify socket')
-		if sd_sock[0] == '@': sd_sock = '\0' + sd_sock[1:]
-		with so.socket(so.AF_UNIX, so.SOCK_DGRAM | so.SOCK_CLOEXEC) as s:
-			s.connect(sd_sock); s.sendall(b'READY=1')
+	else:
+		p_maps = pl.Path(opts.pin) / 'maps'
+		bpf_rb = BPFMapRingBuffer(path=p_maps / 'updates')
+		bpf_table = BPFMapRingTable(path=p_maps / 'conn_table')
 
-	with ( BPFMapRingBuffer(sd_fds.updates) as rb,
-			BPFMapRingTable(sd_fds.conn_table) as table ):
+	with bpf_rb as rb, bpf_table as table:
 		ts0, evs = time.monotonic(), table.read()
 		p(f'[ {time.monotonic()-ts0:> 5.1f} ] --- conn_table: {len(evs)} event(s)')
 		# XXX: rb can replay old events redundant with conn_table

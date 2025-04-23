@@ -1,5 +1,6 @@
 // Docs: https://docs.ebpf.io/
 
+// XXX: add traffic counters for conns, events on those getting updates
 // XXX: test how connect-returns work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through
 // XXX: add cgroup id's to maps, resolve cgroup ids to names here if possible
@@ -46,7 +47,7 @@ struct {
 
 struct {
 	__uint(type, BPF_MAP_TYPE_RINGBUF);
-	__uint(max_entries, 2 * 4096); // ~100 conn_t events
+	__uint(max_entries, 4096); // ~50 conn_t events
 } updates SEC(".maps");
 
 
