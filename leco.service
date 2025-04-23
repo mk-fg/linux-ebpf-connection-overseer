@@ -7,10 +7,14 @@ Type=notify
 NotifyAccess=exec
 FileDescriptorStoreMax=32
 
+User=someuser
+Environment=EV_FIFO=/run/user/1000/leco.fifo
+
 # ExecStartPre= has issues tracking fds, so --pin in required here
 # See https://github.com/systemd/systemd/issues/37192 for details
+ExecStartPre=-+mkfifo -m666 $EV_FIFO
 ExecStartPre=+leco-ebpf-load --pin /sys/fs/bpf/leco --pin-fdstore
-ExecStart=leco
+ExecStart=leco-event-pipe -r 14400 -f $EV_FIFO
 
 [Install]
 WantedBy=multi-user.target
