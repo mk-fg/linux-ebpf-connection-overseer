@@ -5,7 +5,7 @@
 #  https://libbpf.readthedocs.io/en/latest/api.html
 
 import ctypes as ct, socket as so, ipaddress as ip, pathlib as pl
-import os, sys, re, struct, errno, time, json, signal
+import os, sys, re, struct, errno, time, json, signal, select
 
 
 class adict(dict):
@@ -48,9 +48,8 @@ class BPFError(Exception): pass
 class BPFMap:
 
 	class _rb_struct(ct.Structure): pass
-	class _map_info(ct.Structure): _align_, _fields_ = 8, (
-		list((k, ct.c_uint) for k in 'type id key value entires flags'.split())
-		+ [("name", ct.c_char * 16)] )
+	class _map_info(ct.Structure): _align_, _fields_ = 8, list( (k, ct.c_uint)
+		for k in 'type id key value entires flags'.split() ) + [('name', ct.c_char * 16)]
 	class _map_batch_opts(ct.Structure): _fields_ = [
 		('sz', ct.c_size_t), ('elem_flags', ct.c_ulonglong), ('flags', ct.c_ulonglong) ]
 	_rb_handler_t = ct.CFUNCTYPE(ct.c_int, ct.c_void_p, ct.c_void_p, ct.c_size_t)
@@ -68,19 +67,21 @@ class BPFMap:
 		lib.bpf_map_lookup_batch.argtypes = ( cint,
 			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(self._map_batch_opts) )
 
-	fd = None
+	fd = fd_close = None
 	def map_fd(self, fd=None, path=None):
-		if fd is not None: return fd # doesn't need to be closed later
-		if not path: raise ValueError('Either bpf-map fd or path must be specified')
-		if (fd := self._libbpf.bpf_obj_get(str(path).encode())) < 0:
-			raise BPFError(f'Failed bpf-map init from path for [ {path} ]')
+		if self.fd is not None: return self.fd
+		if fd is None:
+			if not path: raise ValueError('Either bpf-map fd or path must be specified')
+			if (fd := self._libbpf.bpf_obj_get(str(path).encode())) < 0:
+				raise BPFError(f'Failed bpf-map init from path for [ {path} ]')
+			self.fd_close = True
 		self.fd = fd; return fd
 
 	def ev_parse( self, ev, o=0,
-			_fmt='<BQ16s16sHHII16s', _ct_proto='tcp udp x'.split(),
+			_st=struct.Struct('<BQ16s16sHHII16s'), _ct_proto='tcp udp x'.split(),
 			_fields='ct ns saddr daddr sport dport pid uid comm'.split(),
 			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
-		ev = adict(zip(_fields, struct.unpack_from(_fmt, ev, offset=o)))
+		ev = adict(zip(_fields, _st.unpack_from(ev, offset=o)))
 		if not ev.ct: return
 		ev.proto, (ev.af, n) = _ct_proto[(ev.ct-1)//2], _ct_af[ev.ct%2]
 		for k in 'saddr', 'daddr': ev[k] = ip.ip_address(ev[k][:n])
@@ -90,7 +91,7 @@ class BPFMap:
 	def __enter__(self): return self
 	def __exit__(self, *err): self.close()
 	def close(self):
-		if self.fd is not None: os.close(self.fd); self.fd = None
+		if self.fd_close and self.fd is not None: os.close(self.fd); self.fd = None
 
 class BPFMapRingTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
@@ -150,8 +151,7 @@ class BPFMapRingBuffer(BPFMap):
 
 
 def stream_events(table, rb, dst, replay_limit=None):
-	# Reopening FIFO on the other end in-between events won't break the loop here
-	def _dst_write(ev):
+	def _dst_write(ev, ts, ns):
 		ev.saddr, ev.daddr = str(ev.saddr), str(ev.daddr)
 		ev.ts = ts - (ns - ev.ns) / 1_000_000_000
 		try: dst.write(json.dumps(ev)); dst.write('\n'); dst.flush()
@@ -159,17 +159,21 @@ def stream_events(table, rb, dst, replay_limit=None):
 			if dst is sys.stdout: os.dup2(os.open(
 				os.devnull, os.O_WRONLY ), dst.fileno())
 			return True
-	ns_table, ns_cutoff, ts, ns = 0, 0, time.time(), time.monotonic_ns()
-	if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
-	for ev in sorted(table.read(), key=lambda ev: ev.ns):
-		ns_table = ev.ns
-		if ev.ns < ns_cutoff: continue
-		if _dst_write(ev): return
-	while True:
-		for ev in rb.wait(1800):
-			if ev.ns <= ns_table or ev.ns < ns_cutoff: continue
-			ts, ns = time.time(), time.monotonic_ns()
-			if _dst_write(ev): return
+	with select.epoll(sizehint=2) as poll:
+		ns_table, ns_cutoff, ts, ns = 0, 0, time.time(), time.monotonic_ns()
+		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
+		for ev in sorted(table.read(), key=lambda ev: ev.ns):
+			if (ns_table := ev.ns) < ns_cutoff: continue
+			if _dst_write(ev, ts, ns): return
+		poll.register(dst_fd := dst.fileno(), 0)
+		poll.register(rb.fd, select.EPOLLIN)
+		while True:
+			if not (ev_fds := poll.poll(maxevents=1)): continue
+			if ev_fds[0][0] == dst_fd: break # dst pipe closed
+			for ev in rb.wait(0.1): # shouldn't actually need to wait
+				if ev.ns <= ns_table or ev.ns < ns_cutoff: continue
+				if _dst_write(ev, time.time(), time.monotonic_ns()): return
+			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
 
 def main(argv=None):
 	import argparse, textwrap
@@ -220,11 +224,11 @@ def main(argv=None):
 
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_table as table:
-		while True:
-			dst = openat2(opts.fifo, 'w') if opts.fifo else sys.stdout
+		if not opts.fifo: return stream_events(table, rb, sys.stdout, opts.replay_window)
+		while (dst := openat2(opts.fifo, 'w')):
 			try: stream_events(table, rb, dst, opts.replay_window)
 			finally:
-				try: opts.fifo and dst.close()
+				try: dst.close()
 				except BrokenPipeError: pass
 
 if __name__ == '__main__': sys.exit(main())
