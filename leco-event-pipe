@@ -135,13 +135,13 @@ class BPFMapRingBuffer(BPFMap):
 		self.rb = self._libbpf.ring_buffer__new(self.map_fd(fd, path), self.handler, None, None)
 		if not self.rb: raise BPFError(f'libbpf ring_buffer__new failed [fd={fd} path={path}]')
 
-	def close(self):
-		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
-		super().close()
-
 	def _ev_handler(self, ctx, ev, n):
 		return self.updates.append(self.ev_parse(
 			bytes((ct.c_char*n).from_address(ev)) )) or 0
+
+	def close(self):
+		if self.rb: self._libbpf.ring_buffer__free(self.rb); self.rb = None
+		super().close()
 
 	def wait(self, timeout=1.0):
 		self.updates.clear()
@@ -225,7 +225,7 @@ def main(argv=None):
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_table as table:
 		if not opts.fifo: return stream_events(table, rb, sys.stdout, opts.replay_window)
-		while (dst := openat2(opts.fifo, 'w')):
+		while dst := openat2(opts.fifo, 'w'):
 			try: stream_events(table, rb, dst, opts.replay_window)
 			finally:
 				try: dst.close()
