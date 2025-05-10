@@ -1,39 +1,9 @@
 ##  High level SDL 3.0 shared library wrapper for Nim.
-##
-##  Documentation below comes from SDL 3.0 library documentation.
-##
-##  Usage
-##  -----
-##
-##  ```nim
-##  # Load all symbols from SDL 3.0 shared library.
-##  # This must be the first proc called.
-##  if not open_sdl3_library():
-##    echo "Failed to load SDL 3.0 library: ", last_sdl3_error()
-##    quit QuitFailure
-##  defer:
-##    close_sdl3_library()
-##
-##  # Initialize SDL 3.0.
-##  if not Init INIT_VIDEO:
-##    echo "Failed to initialize SDL 3.0: ", GetError()
-##    quit QuitFailure
-##  defer:
-##    Quit()
-##
-##  # SDL 3.0 calls follow…
-##  ```
-##
 #[
   SPDX-License-Identifier: NCSA OR MIT OR Zlib
 ]#
 
 {.push raises: [].}
-
-when NimMajor >= 2 and defined nimPreviewSlimSystem:
-  from std/assertions import assert
-
-import std/options
 
 import nsdl3/libsdl3
 import nsdl3/utils
@@ -68,20 +38,12 @@ export sdl3ttf
 import nsdl3/sdl3inc/sdl3video
 export sdl3video
 
-when not declared newSeqUninit:
-  template newSeqUninit*[T: SomeNumber](len: Natural): seq[T] =
-      newSeqUninitialized[T] len
-
 # =========================================================================== #
 # ==  SDL3 library functions                                               == #
 # =========================================================================== #
 
-converter from_sdl_bool(b: cbool): bool =
-  b.int != 0
-
-converter to_sdl_bool(b: bool): cbool =
-  b.cbool
-
+converter from_sdl_bool(b: cbool): bool = b.int != 0
+converter to_sdl_bool(b: bool): cbool = b.cbool
 proc c_free(mem: pointer) {.header: "<stdlib.h>", importc: "free", nodecl.}
 
 # --------------------------------------------------------------------------- #
@@ -115,7 +77,6 @@ proc GetError*(): string {.inline.} =
   ##  ```c
   ##  const char *SDL_GetError(void)
   ##  ```
-  assert SDL_GetError != nil
   $SDL_GetError()
 
 # int SDL_SetError(const char *fmt, ...)
@@ -154,10 +115,7 @@ proc PeepEvents*(events: var openArray[Event], numevents: int,
   ##                     Uint32 maxType)
   ##  ```
   let num_events = cint min(numevents, events.len)
-  result = SDL_PeepEvents(events[0].addr, num_events, action,
-                                  min_type, max_type)
-  if result < 0:
-    log_error "SDL_PeepEvents failed: ", $SDL_GetError()
+  chk_err_if result < 0: SDL_PeepEvents events[0].addr, num_events, action, min_type, max_type
 
 proc PeepEvents*(events: var openArray[Event], action: EventAction,
                  min_type: EventType, max_type: EventType): int {.inline.} =
@@ -256,16 +214,8 @@ proc SetHint*(name: HintName, value: string) =
 # <SDL3/SDL_init.h>                                                           #
 # --------------------------------------------------------------------------- #
 
-proc GetAppMetadataProperty*(name: AppMetadataProperty): Option[string] =
-  ##  XXX.
-  let prop = SDL_GetAppMetadataProperty name
-  if unlikely prop == nil:
-    return none string
-  return some $prop
-
 proc Init*(flags: InitFlags = INIT_VIDEO) =
   ##  Initialize SDL3 library.
-  assert SDL_Init != nil, "did you forget to call open_sdl3_library?"
   chk SDL_Init(flags)
 
 proc InitSubSystem*(flags: InitFlags) =
@@ -387,8 +337,7 @@ proc CreatePalette*(ncolors: int): ptr Palette =
   ##  ```c
   ##  SDL_Palette *SDL_CreatePalette(int ncolors)
   ##  ```
-  ensure_not_nil "SDL_CreatePalette":
-    SDL_CreatePalette ncolors.cint
+  chk_nil SDL_CreatePalette(ncolors.cint)
 
 # SDL_PixelFormat * SDL_CreatePixelFormat(Uint32 pixel_format)
 
@@ -402,15 +351,13 @@ proc DestroyPalette*(palette: ptr Palette) =
 # SDL_bool SDL_GetMasksForPixelFormatEnum(Uint32 format, int *bpp,
 #     Uint32 *Rmask, Uint32 *Gmask, Uint32 *Bmask, Uint32 *Amask)
 
-proc GetPixelFormatDetails*(format: PixelFormatEnum): Option[PixelFormatDetails] =
+proc GetPixelFormatDetails*(format: PixelFormatEnum): PixelFormatDetails =
   ##  ```c
   ##  const SDL_PixelFormatDetails * SDL_GetPixelFormatDetails(SDL_PixelFormat format)
   ##  ```
   let details = SDL_GetPixelFormatDetails format
-  if details == nil:
-    log_error "SDL_GetPixelFormatDetails failed: " & $SDL_GetError()
-    return none PixelFormatDetails
-  return some details[]
+  if details.isNil: raise SDLError.newException("SDL_GetPixelFormatDetails failed: " & $SDL_GetError())
+  return details[]
 
 proc GetPixelFormatForMasks*(bpp: int, rmask: uint32, gmask: uint32,
                              bmask: uint32,
@@ -466,9 +413,7 @@ proc CreateProperties*(): PropertiesID =
   ##  ```c
   ##  SDL_PropertiesID SDL_CreateProperties(void)
   ##  ```
-  result = SDL_CreateProperties()
-  if result == PropertiesID 0:
-    log_error "SDL_CreateProperties failed: " & $SDL_GetError()
+  chk_err_if result == PropertiesID 0: SDL_CreateProperties()
 
 proc DestroyProperties*(props: PropertiesID) {.inline.} =
   ##  ```c
@@ -550,24 +495,21 @@ proc CreateRenderer*(window: Window): Renderer =
   ##  SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name,
   ##                                   Uint32 flags)
   ##  ```
-  ensure_not_nil "SDL_CreateRenderer":
-    SDL_CreateRenderer window, nil
+  chk_nil SDL_CreateRenderer(window, nil)
 
 proc CreateRenderer*(window: Window, name: string): Renderer =
   ##  ```c
   ##  SDL_Renderer *SDL_CreateRenderer(SDL_Window *window, const char *name,
   ##                                   Uint32 flags)
   ##  ```
-  ensure_not_nil "SDL_CreateRenderer":
-    SDL_CreateRenderer window, name.cstring
+  chk_nil SDL_CreateRenderer(window, name.cstring)
 
 proc CreateRendererWithProperties*(props: PropertiesID): Renderer =
   ##  Create a 2D rendering context for a window, with the specified
   ##  properties.
   ##
   ##  `SDL_CreateRendererWithProperties`
-  ensure_not_nil "SDL_CreateRendererWithProperties":
-    SDL_CreateRendererWithProperties props
+  chk_nil SDL_CreateRendererWithProperties(props)
 
 # SDL_Renderer *SDL_CreateSoftwareRenderer(SDL_Surface *surface)
 
@@ -576,24 +518,19 @@ proc CreateTexture*(renderer: Renderer, format: PixelFormatEnum,
   ##  Create a texture for a rendering context.
   ##
   ##  `SDL_CreateTexture`
-  ensure_not_nil "SDL_CreateTexture":
-    SDL_CreateTexture renderer, format, access, width.cint, height.cint
+  chk_nil SDL_CreateTexture(renderer, format, access, width.cint, height.cint)
 
-proc CreateTextureFromSurface*(renderer: Renderer,
-                               surface: SurfacePtr): Texture =
+proc CreateTextureFromSurface*(renderer: Renderer, surface: SurfacePtr): Texture =
   ##  Create a texture from an existing surface.
   ##
   ##  `SDL_CreateTextureFromSurface`
-  ensure_not_nil "SDL_CreateTextureFromSurface":
-    SDL_CreateTextureFromSurface renderer, surface
+  chk_nil SDL_CreateTextureFromSurface(renderer, surface)
 
-proc CreateTextureWithProperties*(renderer: Renderer,
-                                  props: PropertiesID): Texture =
+proc CreateTextureWithProperties*(renderer: Renderer, props: PropertiesID): Texture =
   ##  Create a texture for a rendering context with the specified properties.
   ##
   ##  `SDL_CreateTextureWithProperties`
-  ensure_not_nil "SDL_CreateTextureWithProperties":
-    SDL_CreateTextureWithProperties renderer, props
+  chk_nil SDL_CreateTextureWithProperties(renderer, props)
 
 proc CreateWindowAndRenderer*(title: string, width: int, height: int,
                               window_flags: WindowFlags = WindowFlags 0): tuple[window: Window, renderer: Renderer] =
@@ -650,8 +587,7 @@ proc GetRenderer*(window: Window): Renderer =
   ##  ```c
   ##  SDL_Renderer *SDL_GetRenderer(SDL_Window *window)
   ##  ```
-  ensure_not_nil "SDL_GetRenderer":
-    SDL_GetRenderer window
+  chk_nil SDL_GetRenderer(window)
 
 # int SDL_GetTextureAlphaMod(SDL_Texture *texture, Uint8 *alpha)
 # int SDL_GetTextureBlendMode(SDL_Texture *texture, SDL_BlendMode *blendMode)
@@ -662,9 +598,7 @@ proc GetTextureProperties*(texture: Texture): PropertiesID =
   ##  ```c
   ##  SDL_PropertiesID SDL_GetTextureProperties(SDL_Texture *texture)
   ##  ```
-  result = SDL_GetTextureProperties texture
-  if unlikely result == PropertiesID 0:
-    log_error "SDL_GetTextureProperties failed: " & $SDL_GetError()
+  chk_err_if result == PropertiesID 0: SDL_GetTextureProperties texture
 
 # int SDL_GetTextureScaleMode(SDL_Texture *texture, SDL_ScaleMode *scaleMode)
 
@@ -867,8 +801,6 @@ proc RenderRect*(renderer: Renderer, rect: FRect) =
   ##  ```c
   ##  int SDL_RenderRect(SDL_Renderer *renderer, const SDL_FRect *rect)
   ##  ```
-  when NimMajor < 2:
-    var rect = rect
   chk SDL_RenderRect(renderer, rect.addr)
 
 proc RenderRect*(renderer: Renderer, x, y: float,
@@ -893,8 +825,6 @@ proc RenderTexture*(renderer: Renderer, texture: Texture, dst: FRect) =
   ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
   ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
   ##  ```
-  when NimMajor < 2:
-    var dst = dst
   chk SDL_RenderTexture(renderer, texture, nil, dst.addr)
 
 # XXX: add similar with floats?
@@ -913,28 +843,19 @@ proc RenderTexture*(renderer: Renderer, texture: Texture, srcrect: FRect,
   ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
   ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
   ##  ```
-  when NimMajor < 2:
-    var srcrect = srcrect
-    var dstrect = dstrect
   chk SDL_RenderTexture(renderer, texture, srcrect.addr, dstrect.addr)
 
 proc RenderTextureRotated*(renderer: Renderer, texture: Texture,
                            srcrect: FRect, dstrect: FRect, angle: float,
                            center: FPoint, flip: FlipMode) =
   ##  See: `SDL_RenderTextureRotated`.
-  when NimMajor < 2:
-    var srcrect = srcrect
-    var dstrect = dstrect
-    var center = center
-  chk SDL_RenderTextureRotated( renderer, texture, srcrect.addr, dstrect.addr,
-                             angle.cdouble, center.addr, flip )
+  chk SDL_RenderTextureRotated( renderer, texture,
+    srcrect.addr, dstrect.addr, angle.cdouble, center.addr, flip )
 
 proc SetRenderClipRect*(renderer: Renderer, rect: Rect) =
   ##  ```c
   ##  int SDL_SetRenderClipRect(SDL_Renderer *renderer, const SDL_Rect *rect)
   ##  ```
-  when NimMajor < 2:
-    var rect = rect
   chk SDL_SetRenderClipRect(renderer, rect.addr)
 
 proc SetRenderDrawBlendMode*(renderer: Renderer, blend_mode: BlendMode) =
@@ -1062,8 +983,7 @@ proc CreateSurfaceFrom*(width, height: int, format: PixelFormatEnum,
   ##  SDL_Surface *SDL_CreateSurfaceFrom(void *pixels, int width, int height,
   ##                                    int pitch, Uint32 format)
   ##  ```
-  ensure_not_nil "SDL_CreateSurfaceFrom":
-    SDL_CreateSurfaceFrom width.cint, height.cint, format, pixels, pitch.cint
+  chk_nil SDL_CreateSurfaceFrom(width.cint, height.cint, format, pixels, pitch.cint)
 
 proc DestroySurface*(surface: SurfacePtr) {.inline.} =
   ##  ```c
@@ -1089,26 +1009,7 @@ proc LoadBMP*(file: string): SurfacePtr =
   ##  ```c
   ##  SDL_Surface *SDL_LoadBMP(const char *file)
   ##  ```
-  ensure_not_nil "SDL_LoadBMP":
-    SDL_LoadBMP file
-
-#proc load_bmp_rw*(src: RWopsPtr, freesrc: bool): SurfacePtr =
-#  ##  ```c
-#  ##  SDL_Surface *SDL_LoadBMP_RW(SDL_RWops *src, SDL_bool freesrc)
-#  ##  ```
-#  ensure_not_nil "SDL_LoadBMP_RW":
-#    SDL_LoadBMP_RW src, freesrc.cint
-
-#proc load_bmp_rw_unchecked(src: RWopsPtr, freesrc: bool): SurfacePtr {.inline.} =
-#  ##  Unchecked version. Used by `load_bmp` not to generate multiple errors
-#  ##  such as:
-#  ##    - SDL_RWFromFile failed: Couldn't open sail.bmp
-#  ##    - SDL_LoadBMP_RW failed: Parameter 'src' is invalid
-#  ##
-#  ##  ```c
-#  ##  SDL_Surface *SDL_LoadBMP_RW(SDL_RWops *src, SDL_bool freesrc)
-#  ##  ```
-#  SDL_LoadBMP_RW src, freesrc.cint
+  chk_nil SDL_LoadBMP(file)
 
 proc LockSurface*(surface: SurfacePtr) =
   ##  ```c
@@ -1184,9 +1085,7 @@ proc AddTimer*(interval: uint32, callback: TimerCallback,
   ##  SDL_TimerID SDL_AddTimer(Uint32 interval, SDL_TimerCallback callback,
   ##                           void *param)
   ##  ```
-  result = SDL_AddTimer(interval, callback, param)
-  if result.int == 0:
-    log_error "SDL_AddTimer failed: ", $SDL_GetError()
+  chk_err_if result.int == 0: SDL_AddTimer interval, callback, param
 
 proc Delay*(ms: uint32) {.inline.} =
   ##  ```c
@@ -1259,9 +1158,7 @@ proc CreatePopupWindow*(parent: Window, offset_x: int, offset_y: int,
   ##                                    int offset_y, int w, int h,
   ##                                    Uint32 flags)
   ##  ```
-  ensure_not_nil "SDL_CreatePopupWindow":
-    SDL_CreatePopupWindow parent, offset_x.cint, offset_y.cint,
-                                  w.cint, h.cint, flags
+  chk_nil SDL_CreatePopupWindow(parent, offset_x.cint, offset_y.cint, w.cint, h.cint, flags)
 
 proc CreateWindow*(title: string, w: int, h: int,
                    flags = WindowFlags 0): Window =
@@ -1271,15 +1168,13 @@ proc CreateWindow*(title: string, w: int, h: int,
   ##  SDL_Window *SDL_CreateWindow(const char *title, int w, int h,
   ##                               Uint32 flags)
   ##  ```
-  ensure_not_nil "SDL_CreateWindow":
-    SDL_CreateWindow title, w.cint, h.cint, flags
+  chk_nil SDL_CreateWindow(title, w.cint, h.cint, flags)
 
 proc CreateWindowWithProperties*(props: PropertiesID): Window =
   ##  Create a window with the specified properties.
   ##
   ##  `SDL_CreateWindowWithProperties`
-  ensure_not_nil "SDL_CreateWindowWithProperties":
-    SDL_CreateWindowWithProperties props
+  chk_nil SDL_CreateWindowWithProperties(props)
 
 proc DestroyWindow*(window: Window) {.inline.} =
   ##  Destroy the window.
@@ -1350,10 +1245,8 @@ proc GetClosestFullscreenDisplayMode*(display_id: DisplayID, w: int, h: int,
   ##                                      int w, int h, float refresh_rate,
   ##                                      SDL_bool include_high_density_modes)
   ##  ```
-  ensure_not_nil "SDL_GetClosestFullscreenDisplayMode":
-    SDL_GetClosestFullscreenDisplayMode display_id, w.cint, h.cint,
-                                                refresh_rate.cfloat,
-                                                include_high_density_modes
+  chk_nil SDL_GetClosestFullscreenDisplayMode( display_id,
+    w.cint, h.cint, refresh_rate.cfloat, include_high_density_modes )
 
 # XXX: do a copy instrad of returning ptr?
 proc GetCurrentDisplayMode*(display_id: DisplayID): ptr DisplayMode =
@@ -1362,8 +1255,7 @@ proc GetCurrentDisplayMode*(display_id: DisplayID): ptr DisplayMode =
   ##  ```c
   ##  const SDL_DisplayMode *SDL_GetCurrentDisplayMode(SDL_DisplayID displayID)
   ##  ```
-  ensure_not_nil "SDL_GetCurrentDisplayMode":
-    SDL_GetCurrentDisplayMode display_id
+  chk_nil SDL_GetCurrentDisplayMode(display_id)
 
 # SDL_DisplayOrientation SDL_GetCurrentDisplayOrientation(SDL_DisplayID displayID)
 
@@ -1374,8 +1266,7 @@ proc GetCurrentVideoDriver*(): string =
   ##  const char *SDL_GetCurrentVideoDriver(void)
   ##  ```
   let driver = SDL_GetCurrentVideoDriver()
-  if driver == nil:
-    return ""
+  if driver.isNil: return ""
   $driver
 
 # const SDL_DisplayMode *SDL_GetDesktopDisplayMode(SDL_DisplayID displayID)
@@ -1420,9 +1311,7 @@ proc GetDisplayForWindow*(window: Window): DisplayID =
   ##  ```c
   ##  SDL_DisplayID SDL_GetDisplayForWindow(SDL_Window *window)
   ##  ```
-  result = SDL_GetDisplayForWindow window
-  if result.uint32 == 0:
-    log_error "SDL_GetDisplayForWindow failed: ", $SDL_GetError()
+  chk_err_if result.uint32 == 0: SDL_GetDisplayForWindow window
 
 proc GetDisplayName*(display_id: DisplayID): string =
   ##  Get the name of a display in UTF-8 encoding.
@@ -1436,19 +1325,6 @@ proc GetDisplayName*(display_id: DisplayID): string =
 
 # SDL_PropertiesID SDL_GetGlobalProperties(void)
 
-# XXX: test and remove.
-# proc get_displays*(count: var int): ptr UncheckedArray[DisplayID] =
-#   ##  ```c
-#   ##  SDL_DisplayID *SDL_GetDisplays(int *count)
-#   ##  ```
-#   {.warning: "allocated seq and do not bother the user with free".}
-#   var outcount: cint = 0
-#   result = SDL_GetDisplays outcount.addr
-#   if result == nil:
-#     log_error "SDL_GetDisplays failed: ", $SDL_GetError()
-#     return nil
-#   count = outcount
-
 proc GetDisplays*(): seq[DisplayID] =
   ##  Get a list of currently connected displays.
   ##
@@ -1456,16 +1332,10 @@ proc GetDisplays*(): seq[DisplayID] =
   ##  SDL_DisplayID *SDL_GetDisplays(int *count)
   ##  ```
   var count: cint = 0
-
   let display_list = SDL_GetDisplays(count.addr)
-  if display_list == nil:
-    log_error "SDL_GetDisplays failed: ", $SDL_GetError()
-    return @[]
-
+  if display_list.isNil: return @[]
   result = newSeqOfCap[DisplayID] count
-  for i in 0 ..< count:
-    result.add display_list[i]
-
+  for i in 0 ..< count: result.add display_list[i]
   c_free display_list
 
 proc GetDisplayUsableBounds*(display_id: DisplayID, rect: var Rect) =
@@ -1478,8 +1348,7 @@ proc GetDisplayUsableBounds*(display_id: DisplayID, rect: var Rect) =
   chk SDL_GetDisplayUsableBounds(display_id, rect.addr)
 
 # XXX: TODO: remove this, leave only Rect or add x and y?
-proc GetDisplayUsableBounds*(display_id: DisplayID, width: var int,
-                             height: var int) =
+proc GetDisplayUsableBounds*(display_id: DisplayID, width: var int, height: var int) =
   ##  Get the usable desktop area represented by a display, in screen
   ##  coordinates.
   ##
@@ -1493,20 +1362,6 @@ proc GetDisplayUsableBounds*(display_id: DisplayID, width: var int,
 
 # const SDL_DisplayMode **SDL_GetFullscreenDisplayModes(SDL_DisplayID displayID, int *count)
 
-# {.warning: "return nim type".}
-# proc get_fullscreen_display_modes*(display_id: DisplayID,
-#                                    count: var int): ptr UncheckedArray[ptr DisplayMode] =
-#   ##  ```c
-#   ##  const SDL_DisplayMode **SDL_GetFullscreenDisplayModes(SDL_DisplayID displayID, int *count)
-#   ##  ```
-#   var outcount: cint = 0
-#   result = SDL_GetFullscreenDisplayModes(display_id, outcount.addr)
-#   if result == nil:
-#     log_error "SDL_GetFullscreenDisplayModes failed: ", $SDL_GetError()
-#     return nil
-#   count = outcount
-
-# XXX: test it and remove above
 proc GetFullscreenDisplayModes*(display_id: DisplayID): seq[DisplayMode] =
   ##  Get a list of fullscreen display modes available on a display.
   ##
@@ -1514,16 +1369,10 @@ proc GetFullscreenDisplayModes*(display_id: DisplayID): seq[DisplayMode] =
   ##  const SDL_DisplayMode **SDL_GetFullscreenDisplayModes(SDL_DisplayID displayID, int *count)
   ##  ```
   var count: cint = 0
-
   let mode_list = SDL_GetFullscreenDisplayModes(display_id, count.addr)
-  if mode_list == nil:
-    log_error "SDL_GetFullscreenDisplayModes failed: ", $SDL_GetError()
-    return @[]
-
+  if mode_list.isNil: return @[]
   result = newSeqOfCap[DisplayMode] count
-  for i in 0 ..< count:
-    result.add mode_list[i][]
-
+  for i in 0 ..< count: result.add mode_list[i][]
   c_free mode_list
 
 proc GetGrabbedWindow*(): Window =
@@ -1542,8 +1391,7 @@ proc GetNumVideoDrivers*(): int =
   ##  ```c
   ##  int SDL_GetNumVideoDrivers(void)
   ##  ```
-  ensure_positive "SDL_GetNumVideoDrivers":
-    SDL_GetNumVideoDrivers()
+  chk_err_if result <= 0: SDL_GetNumVideoDrivers()
 
 proc GetPrimaryDisplay*(): DisplayID {.inline.} =
   ##  Return the primary display.
@@ -1585,8 +1433,7 @@ proc GetWindowFullscreenMode*(window: Window = nil): ptr DisplayMode =
   ##  ```c
   ##  const SDL_DisplayMode *SDL_GetWindowFullscreenMode(SDL_Window *window)
   ##  ```
-  ensure_not_nil "SDL_GetWindowFullscreenMode":
-    SDL_GetWindowFullscreenMode window
+  chk_nil SDL_GetWindowFullscreenMode(window)
 
 # void *SDL_GetWindowICCProfile(SDL_Window *window, size_t *size)
 
@@ -1596,8 +1443,7 @@ proc GetWindowID*(window: Window): WindowID {.inline.} =
   ##  ```c
   ##  SDL_WindowID SDL_GetWindowID(SDL_Window *window)
   ##  ```
-  # XXX: ensure_positive
-  SDL_GetWindowID window
+  chk_err_if result.int <= 0: SDL_GetWindowID window
 
 proc GetWindowKeyboardGrab*(window: Window): bool {.discardable, inline.} =
   ##  Get a window's keyboard grab mode.
@@ -1648,9 +1494,7 @@ proc GetWindowPixelFormat*(window: Window): PixelFormatEnum =
   ##  ```c
   ##  Uint32 SDL_GetWindowPixelFormat(SDL_Window *window)
   ##  ```
-  result = SDL_GetWindowPixelFormat window
-  if result == PIXELFORMAT_UNKNOWN:
-    log_error "SDL_GetWindowPixelFormat failed: " & $SDL_GetError()
+  SDL_GetWindowPixelFormat window
 
 proc GetWindowPosition*(window: Window, x: var int, y: var int) =
   ##  Get the position of a window.
@@ -1999,7 +1843,7 @@ proc DrawRendererText*(text: Text, x: float, y: float) =
   ##  ```
   chk TTF_DrawRendererText(text, x.cfloat, y.cfloat)
 
-proc DrawRendererText*(text: Text, x: int, y: int) =
+proc DrawRendererText*(text: Text, x: int, y: int) {.inline.} =
   DrawRendererText text, x.cfloat, y.cfloat
 
 # =========================================================================== #

@@ -7,8 +7,6 @@
 # XXX: cleanup later
 import std/[ strutils, strformat, parseopt,
 	os, osproc, logging, re, tables, monotimes, base64 ]
-
-# XXX: convert ensure_not_nil to simpler macros
 import nsdl3 as sdl
 
 {.passl: "-lcrypto"}
@@ -31,7 +29,7 @@ type Conf = object
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
 	color_bg = Color(r:0, g:20, b:0, a:128)
-	color_fg = Color(r:33, g:74, b:206, a:255)
+	color_fg = Color(r:0xe4, g:0xe4, b:0xe4, a:0xff)
 	run_fifo = ""
 	run_debug = false
 	app_version = "0.1"
@@ -103,6 +101,8 @@ proc parse_conf_file(conf_path: string): Conf =
 	return conf
 
 
+{.push base.}
+
 type
 	CNS = int64 # nanoseconds-based connection ID
 	NetConns = object
@@ -113,7 +113,7 @@ type
 		line: string
 
 let ns_static = getMonoTime().ticks # XXX
-method conn_list(o: var NetConns, limit: int): seq[ConnInfo] {.base.} =
+method conn_list(o: var NetConns, limit: int): seq[ConnInfo] =
 	# XXX: returns N either most-recently-updated rows
 	# XXX: no need to return more than the window rows, as those should always fill it up
 	# let ns = getMonoTime().ticks # for id/colors/hashes - line strings can change due to traffic counters
@@ -149,7 +149,7 @@ type
 		replaced = true
 		updated = true
 
-method init(o: var Painter) {.base.} =
+method init(o: var Painter) =
 	o.txt_font = sdl.OpenFont(o.conf.font_file, o.conf.font_h)
 	o.txt_engine = sdl.CreateRendererTextEngine(o.rdr)
 	o.txt = o.txt_engine.CreateText(o.txt_font, "", 0)
@@ -158,14 +158,14 @@ method init(o: var Painter) {.base.} =
 		o.conf.line_uid_fmt % ("W".repeat(o.conf.line_uid_chars) & " ") )
 	o.uid_w = w
 
-method close(o: var Painter) {.base.} =
+method close(o: var Painter) =
 	if o.closed: return
 	o.txt.DestroyText()
 	o.txt_engine.DestroyRendererTextEngine()
 	o.txt_font.CloseFont()
 	o.closed = true
 
-method check_texture(o: var Painter) {.base.} =
+method check_texture(o: var Painter) =
 	## (Re-)Create texture matching window size, to (re-)render all text onto
 	var w, h: int
 	o.win.GetWindowSize(w, h)
@@ -183,7 +183,7 @@ method check_texture(o: var Painter) {.base.} =
 	o.oy += ((h - o.oy) - o.rows_draw * o.conf.line_h) div o.rows_draw
 	o.rows.clear() # put up all fresh rows
 
-method row_uid(o: Painter, ns: CNS): (string, Color) {.base.} =
+method row_uid(o: Painter, ns: CNS): (string, Color) =
 	var
 		ns_str = $ns
 		uid_str = newString(32)
@@ -193,7 +193,7 @@ method row_uid(o: Painter, ns: CNS): (string, Color) {.base.} =
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)
 
-method row_get(o: var Painter, ns: CNS, line: string): PaintedRow {.base.} =
+method row_get(o: var Painter, ns: CNS, line: string): PaintedRow =
 	## Returns either matching PaintedRow or a new one,
 	##   replacing oldest row in a table if if's at full capacity.
 	let ts = getMonoTime().ticks
@@ -213,7 +213,7 @@ method row_get(o: var Painter, ns: CNS, line: string): PaintedRow {.base.} =
 	(result.uid, result.uid_color) = o.row_uid(ns)
 	o.rows[ns] = result
 
-method draw(o: var Painter) {.base.} =
+method draw(o: var Painter) =
 	## Clear/update window contents buffer.
 	## Maintains single texture with all text lines in the right places,
 	##   and copies those to window with appropriate effects applied per-frame.
@@ -243,6 +243,8 @@ method draw(o: var Painter) {.base.} =
 	# XXX: render row-rectangles with effects
 	o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_BLEND)
 	o.rdr.RenderTexture(o.tex, o.conf.win_px, o.conf.win_py, o.tw, o.th)
+
+{.pop.}
 
 
 proc main_help(err="") =
@@ -336,7 +338,7 @@ proc main(argv: seq[string]) =
 	let pxfmt = win.GetWindowPixelFormat()
 	if pxfmt != sdl.PIXELFORMAT_XRGB8888: warn(
 		"Potential issue - window pixel format is expected to always" &
-			&" be RGBX8888, but is actually {pxfmt.GetPixelFormatName()}" )
+			&" be XRGB8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
 	# XXX: add bg thread that schedules render-UserEvents from NetConns read-loop
 	var
