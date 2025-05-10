@@ -19,29 +19,27 @@ import sdl3inc/sdl3rect
 import sdl3inc/sdl3render
 import sdl3inc/sdl3surface
 import sdl3inc/sdl3timer
+import sdl3inc/sdl3ttf
 import sdl3inc/sdl3video
 
 when defined macosx:
-  const lib_paths = [
-    "libSDL3.dylib"
-  ]
+  const lib_paths = ["libSDL3.dylib"]
+  const lib_paths_ttf = ["libSDL3_ttf.dylib"]
 when defined posix:
-  const lib_paths = [
-    "libSDL3.so",
-    "libSDL3.so.0"
-  ]
+  const lib_paths = ["libSDL3.so", "libSDL3.so.0"]
+  const lib_paths_ttf = ["libSDL3_ttf.so", "libSDL3.so.0"]
 elif defined windows:
-  const lib_paths = [
-    "SDL3.dll"
-  ]
+  const lib_paths = ["SDL3.dll"]
+  const lib_paths_ttf = ["SDL3_ttf.dll"]
 else:
   {.fatal: "unsupported platform.".}
+
+{.push hint[GlobalVar]: off.}
+
 
 # =========================================================================== #
 # ==  SDL3 library object                                                  == #
 # =========================================================================== #
-
-{.push hint[GlobalVar]: off.}
 
 dlgencalls "sdl3", lib_paths:
 
@@ -213,9 +211,7 @@ dlgencalls "sdl3", lib_paths:
   # bool SDL_GetMasksForPixelFormatEnum(SDL_PixelFormatEnum format, int *bpp,
   #     Uint32 *Rmask, Uint32 *Gmask, Uint32 *Bmask, Uint32 *Amask)
 
-  proc SDL_GetPixelFormatDetails(
-    format: PixelFormatEnum
-  ): PixelFormatDetailsPtr
+  proc SDL_GetPixelFormatDetails(format: PixelFormatEnum): PixelFormatDetailsPtr
 
   proc SDL_GetPixelFormatForMasks(
     bpp     : cint,
@@ -224,6 +220,8 @@ dlgencalls "sdl3", lib_paths:
     bmask   : uint32,
     amask   : uint32
   ): PixelFormatEnum
+
+  proc SDL_GetPixelFormatName(format: PixelFormatEnum): cstring
 
   # const char* SDL_GetPixelFormatName(SDL_PixelFormatEnum format)
   # void SDL_GetRGB(Uint32 pixel, const SDL_PixelFormatDetails *format,
@@ -945,7 +943,44 @@ dlgencalls "sdl3", lib_paths:
 
   # SDL_bool SDL_WindowHasSurface(SDL_Window *window)
 
+
+# =========================================================================== #
+# ==  SDL3 library object                                                  == #
+# =========================================================================== #
+
+dlgencalls "sdl3_ttf", lib_paths_ttf:
+
+  # ------------------------------------------------------------------------- #
+  # <SDL3/SDL_ttf.h>                                                          #
+  # ------------------------------------------------------------------------- #
+
+  proc TTF_Init(): cbool
+  proc TTF_Quit()
+
+  proc TTF_OpenFont(file: cstring, ptsize: cfloat): Font
+  proc TTF_CloseFont(font: Font)
+
+  proc TTF_GetFontStyle(font: Font): FontStyleFlags
+  proc TTF_SetFontStyle(font: Font, style: FontStyleFlags)
+  proc TTF_GetFontOutline(font: Font): cint
+  proc TTF_SetFontOutline(font: Font, outline: cint): cbool
+  proc TTF_GetFontHinting(font: Font): HintingFlags
+  proc TTF_SetFontHinting(font: Font, hinting: HintingFlags)
+
+  proc TTF_GetFontHeight(font: Font): cint
+  proc TTF_GetStringSize(font: Font, text: cstring, length: csize_t, w: ptr cint, h: ptr cint): cbool
+  proc TTF_RenderText_Blended(font: Font, text: cstring, length: csize_t, fg: Color): SurfacePtr
+
+  proc TTF_CreateRendererTextEngine(renderer: Renderer): TextEngine
+  proc TTF_DestroyRendererTextEngine(engine: TextEngine)
+  proc TTF_CreateText(engine: TextEngine, font: Font, text: cstring, length: csize_t): Text
+  proc TTF_DestroyText(text: Text)
+  proc TTF_SetTextString(text: Text, s: cstring, length: csize_t): cbool
+  proc TTF_SetTextColor(text: Text, r: byte, g: byte, b: byte, a: byte): cbool
+  proc TTF_DrawRendererText(text: Text, x: cfloat, y: cfloat): cbool
+
 {.push hint[GlobalVar]: on.}
+
 
 # =========================================================================== #
 # ==  Loading/unloading functions                                          == #

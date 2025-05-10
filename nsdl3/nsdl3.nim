@@ -24,38 +24,6 @@
 ##  # SDL 3.0 calls follow…
 ##  ```
 ##
-##  Configuration
-##  -------------
-##
-##  You can disable functions you don't use.
-##  All function groups are enabled by default.
-##
-##  | Group       | Define              | Functions Defined In        |
-##  | ----------- | ------------------- | --------------------------- |
-##  | Audio       | `sdl3.audio=0`      | ``<SDL3/SDL_audio.h>``      |
-##  | Blend Mode  | `sdl3.blendmode=0`  | ``<SDL3/SDL_blendmode.h>``  |
-##  | Clipboard   | `sdl3.clipboard=0`  | ``<SDL3/SDL_clipboard.h>``  |
-##  | Gamepad     | `sdl3.gamepad=0`    | ``<SDL3/SDL_gamepad.h>``    |
-##  | Gesture     | `sdl3.gesture=0`    | ``<SDL3/SDL_gesture.h>``    |
-##  | Haptic      | `sdl3.haptic=0`     | ``<SDL3/SDL_haptic.h>``     |
-##  | HID API     | `sdl3.hidapi=0`     | ``<SDL3/SDL_hidapi.h>``     |
-##  | Hints       | `sdl3.hints=0`      | ``<SDL3/SDL_hints.h>``      |
-##  | Joystick    | `sdl3.joystick=0`   | ``<SDL3/SDL_joystick.h>``   |
-##  | Keyboard    | `sdl3.keyboard=0`   | ``<SDL3/SDL_keyboard.h>``   |
-##  | Message Box | `sdl3.messagebox=0` | ``<SDL3/SDL_messagebox.h>`` |
-##  | Mouse       | `sdl3.mouse=0`      | ``<SDL3/SDL_mouse.h>``      |
-##  | Pen         | `sdl3.pen=0`        | ``<SDL3/SDL_pen.h>``        |
-##  | Properties  | `sdl3.mouse=0`      | ``<SDL3/SDL_mouse.h>``      |
-##  | Sensor      | `sdl3.properties=0` | ``<SDL3/SDL_properties.h>`` |
-##  | Touch       | `sdl3.touch=0`      | ``<SDL3/SDL_touch.h>``      |
-##  | Vulkan      | `sdl3.vulkan=0`     | ``<SDL3/SDL_vulkan.h>``     |
-##
-##  For example if you don't need audio functions compile with:
-##
-##  ```sh
-##  nim c -d=sdl3.audio=0 file(s)
-##  ```
-##
 #[
   SPDX-License-Identifier: NCSA OR MIT OR Zlib
 ]#
@@ -71,6 +39,7 @@ import nsdl3/libsdl3
 import nsdl3/utils
 
 export open_sdl3_library, close_sdl3_library, last_sdl3_error
+export open_sdl3_ttf_library, close_sdl3_ttf_library, last_sdl3_ttf_error
 export SDLError
 
 import nsdl3/sdl3inc/sdl3blendmode
@@ -94,6 +63,8 @@ import nsdl3/sdl3inc/sdl3surface
 export sdl3surface
 import nsdl3/sdl3inc/sdl3timer
 export sdl3timer
+import nsdl3/sdl3inc/sdl3ttf
+export sdl3ttf
 import nsdl3/sdl3inc/sdl3video
 export sdl3video
 
@@ -455,6 +426,9 @@ proc GetPixelFormatForMasks*(bpp: int, rmask: uint32, gmask: uint32,
   ##  ```
   SDL_GetPixelFormatForMasks bpp.cint, rmask, gmask, bmask, amask
 
+proc GetPixelFormatName*(format: PixelFormatEnum): string =
+  $SDL_GetPixelFormatName(format)
+
 # const char* SDL_GetPixelFormatName(Uint32 format)
 # void SDL_GetRGB(Uint32 pixel, const SDL_PixelFormat *format, Uint8 *r,
 #     Uint8 *g, Uint8 *b)
@@ -467,8 +441,6 @@ proc MapRGB*(format: PixelFormatDetails, palette: Palette,
   ##  Uint32 SDL_MapRGB(const SDL_PixelFormat *format,
   ##                    Uint8 r, Uint8 g, Uint8 b)
   ##  ```
-  when NimMajor < 2:
-    var format = format
   SDL_MapRGB format.addr, palette.addr, r, g, b
 
 proc MapRGBA*(format: PixelFormatDetails, palette: Palette,
@@ -477,8 +449,6 @@ proc MapRGBA*(format: PixelFormatDetails, palette: Palette,
   ##  Uint32 SDL_MapRGBA(const SDL_PixelFormat *format,
   ##                     Uint8 r, Uint8 g, Uint8 b, Uint8 a)
   ##  ```
-  when NimMajor < 2:
-    var format = format
   SDL_MapRGBA format.addr, palette.addr, r, g, b, a
 
 proc SetPaletteColors*(palette: var Palette, colors: openArray[Color],
@@ -632,17 +602,12 @@ proc CreateWindowAndRenderer*(title: string, width: int, height: int,
   ##  `SDL_CreateWindowAndRenderer`
   var out_window    : Window = nil
   var out_renderer  : Renderer = nil
-  if not SDL_CreateWindowAndRenderer(title, width.cint, height.cint,
-                                     window_flags, out_window.addr,
-                                     out_renderer.addr):
-    echo "SDL_CreateWindowAndRenderer failed: ", GetError()   # XXX: echo
-    # XXX: TODO: check whether this function writes anythin on error.
-    if out_renderer != nil:
-      SDL_DestroyRenderer out_renderer
-    if out_window != nil:
-      SDL_DestroyWindow out_window
-    return (nil, nil)
-  (out_window, out_renderer)
+  if SDL_CreateWindowAndRenderer( title, width.cint, height.cint,
+    window_flags, out_window.addr, out_renderer.addr ): return (out_window, out_renderer)
+  let err = $SDL_GetError()
+  if out_renderer != nil: SDL_DestroyRenderer out_renderer
+  if out_window != nil: SDL_DestroyWindow out_window
+  raise SDLError.newException("SDL_CreateWindowAndRenderer failed: " & err)
 
 proc DestroyRenderer*(renderer: Renderer) {.inline.} =
   ##  Destroy the window rendering context and free all textures.
@@ -811,19 +776,13 @@ proc RenderFillRect*(renderer: Renderer) =
   chk SDL_RenderFillRect(renderer, nil)
 
 proc RenderFillRect*(renderer: Renderer, rect: FRect) =
-  ##  ```c
-  ##  int SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect)
-  ##  ```
-  when NimMajor < 2:
-    var rect = rect
   chk SDL_RenderFillRect(renderer, rect.addr)
 
-proc RenderFillRect*(renderer: Renderer, x: float, y: float,
-                     w: float, h: float) {.inline.} =
-  ##  ```c
-  ##  int SDL_RenderFillRect(SDL_Renderer *renderer, const SDL_FRect *rect)
-  ##  ```
+proc RenderFillRect*(renderer: Renderer, x: float, y: float, w: float, h: float) {.inline.} =
   RenderFillRect renderer, FRect.init(x, y, w, h)
+
+proc RenderFillRect*(renderer: Renderer, x: int, y: int, w: int, h: int) {.inline.} =
+  RenderFillRect renderer, FRect.init(x.float, y.float, w.float, h.float)
 
 # int SDL_RenderFillRects(SDL_Renderer *renderer, const SDL_FRect *rects,
 #     int count)
@@ -994,6 +953,9 @@ proc SetRenderDrawColor*(renderer: Renderer, r: byte, g: byte, b: byte,
   ##                             Uint8 b, Uint8 a)
   ##  ```
   chk SDL_SetRenderDrawColor(renderer, r, g, b, a)
+
+proc SetRenderDrawColor*(renderer: Renderer, c: Color) {.inline.} =
+  SetRenderDrawColor renderer, c.r, c.g, c.b, c.a
 
 # int SDL_SetRenderLogicalPresentation(SDL_Renderer *renderer, int w, int h,
 #     SDL_RendererLogicalPresentation mode, SDL_ScaleMode scale_mode)
@@ -1908,62 +1870,137 @@ proc QuitRequested*(): bool {.inline.} =
   var events: seq[Event] = @[]
   PeepEvents(events, 0, PEEKEVENT, EVENT_QUIT, EVENT_QUIT) > 0
 
+# ------------------------------------------------------------------------- #
+# <SDL3/SDL_ttf.h>                                                          #
+# ------------------------------------------------------------------------- #
 
-# --------------------------------------------------------------------------- #
-# <SDL/SDL_video.h>                                                           #
-# --------------------------------------------------------------------------- #
-
-# Obsolete.
-#proc load_bmp*(file: string): SurfacePtr {.inline.} =
-#  ##  ```c
-#  ##  #define SDL_LoadBMP(file) SDL_LoadBMP_RW(SDL_RWFromFile(file, "rb"), 1)
-#  ##  ```
-#  load_bmp_rw_unchecked(rw_from_file(file, "rb"), true)
-
-# =========================================================================== #
-# ==  SDL3 compat                                                          == #
-# =========================================================================== #
-
-# --------------------------------------------------------------------------- #
-# <SDL3/SDL_render.h>                                                         #
-# --------------------------------------------------------------------------- #
-
-proc RenderCopy*(renderer: Renderer, texture: Texture) {.deprecated: "use RenderTexture instead", inline.} =
+proc XTTFInit*() =
   ##  ```c
-  ##  XXX
+  ##  bool TTF_Init(void);
   ##  ```
-  RenderTexture renderer, texture
+  chk TTF_Init()
 
-proc RenderCopy*(renderer: Renderer, texture: Texture, dst: FRect) {.deprecated: "use RenderTexture instead", inline.} =
+proc XTTFQuit*() =
   ##  ```c
-  ##  XXX
+  ##  void TTF_Quit(void);
   ##  ```
-  RenderTexture renderer, texture, dst
+  TTF_Quit()
 
-proc RenderCopy*(renderer: Renderer, texture: Texture, src, dst: FRect) {.deprecated: "use RenderTexture instead", inline.} =
+proc OpenFont*(file: string, ptsize: float): Font =
   ##  ```c
-  ##  XXX
+  ##  TTF_Font * TTF_OpenFont(const char *file, float ptsize);
   ##  ```
-  RenderTexture renderer, texture, src, dst
+  chk_nil TTF_OpenFont(file.cstring, ptsize.cfloat)
 
-# --------------------------------------------------------------------------- #
-# <SDL3/SDL_surface.h>                                                        #
-# --------------------------------------------------------------------------- #
-
-proc CreateRGBSurfaceFrom*(pixels: pointer, width: int, height: int,
-                           depth: int, pitch: int, rmask: uint32,
-                           gmask: uint32, bmask: uint32, amask: uint32): SurfacePtr {.deprecated: "use CreateSurfaceFrom", inline.} =
+proc CloseFont*(font: Font) =
   ##  ```c
+  ##  void TTF_CloseFont(TTF_Font *font);
   ##  ```
-  CreateSurfaceFrom width.cint, height.cint,
-                    GetPixelFormatForMasks(depth, rmask, gmask, bmask, amask),
-                    pixels, pitch.cint
+  TTF_CloseFont font
 
-
-proc FreeSurface*(surface: SurfacePtr) {.deprecated: "use DestroySurface instead", inline.} =
+proc GetFontStyle*(font: Font): FontStyleFlags =
   ##  ```c
+  ##  TTF_FontStyleFlags TTF_GetFontStyle(const TTF_Font *font);
   ##  ```
-  DestroySurface surface
+  TTF_GetFontStyle font
+
+proc SetFontStyle*(font: Font, style: FontStyleFlags) =
+  ##  ```c
+  ##  void TTF_SetFontStyle(TTF_Font *font, TTF_FontStyleFlags style);
+  ##  ```
+  TTF_SetFontStyle font, style
+
+proc GetFontOutline*(font: Font): int =
+  ##  ```c
+  ##  int TTF_GetFontOutline(const TTF_Font *font);
+  ##  ```
+  TTF_GetFontOutline font
+
+proc SetFontOutline*(font: Font, outline: int) =
+  ##  ```c
+  ##  bool TTF_SetFontOutline(TTF_Font *font, int outline);
+  ##  ```
+  chk TTF_SetFontOutline(font, outline.cint)
+
+proc GetFontHinting*(font: Font): HintingFlags =
+  ##  ```c
+  ##  TTF_HintingFlags TTF_GetFontHinting(const TTF_Font *font);
+  ##  ```
+  TTF_GetFontHinting font
+
+proc SetFontHinting*(font: Font, hinting: HintingFlags) =
+  ##  ```c
+  ##  void TTF_SetFontHinting(TTF_Font *font, TTF_HintingFlags hinting);
+  ##  ```
+  TTF_SetFontHinting font, hinting
+
+proc GetFontHeight*(font: Font): int =
+  ##  ```c
+  ##  void TTF_SetFontHinting(TTF_Font *font, TTF_HintingFlags hinting);
+  ##  ```
+  TTF_GetFontHeight font
+
+proc GetStringSize*(font: Font, text: string): (int, int) =
+  ##  ```c
+  ##  bool TTF_GetStringSize(TTF_Font *font, const char *text, size_t length, int *w, int *h);
+  ##  ```
+  var w, h: cint
+  chk TTF_GetStringSize(font, text.cstring, text.len.csize_t, w.addr, h.addr)
+  return (w.int, h.int)
+
+proc RenderText_Blended*(font: Font, text: string, fg: Color): SurfacePtr =
+  ##  ```c
+  ##  SDL_Surface * TTF_RenderText_Blended(TTF_Font *font, const char *text, size_t length, SDL_Color fg);
+  ##  ```
+  chk_nil TTF_RenderText_Blended(font, text.cstring, text.len.csize_t, fg)
+
+proc CreateRendererTextEngine*(renderer: Renderer): TextEngine =
+  ##  ```c
+  ##  TTF_TextEngine * TTF_CreateRendererTextEngine(SDL_Renderer *renderer);
+  ##  ```
+  chk_nil TTF_CreateRendererTextEngine renderer
+
+proc DestroyRendererTextEngine*(engine: TextEngine) =
+  ##  ```c
+  ##  void TTF_DestroyRendererTextEngine(TTF_TextEngine *engine);
+  ##  ```
+  TTF_DestroyRendererTextEngine engine
+
+proc CreateText*(engine: TextEngine, font: Font, text: string, length: int): Text =
+  ##  ```c
+  ##  TTF_Text * TTF_CreateText(TTF_TextEngine *engine, TTF_Font *font, const char *text, size_t length);
+  ##  ```
+  chk_nil TTF_CreateText(engine, font, text.cstring, length.csize_t)
+
+proc DestroyText*(text: Text) =
+  ##  ```c
+  ##  void TTF_DestroyText(TTF_Text *text);
+  ##  ```
+  TTF_DestroyText text
+
+proc SetTextString*(text: Text, s: string) =
+  ##  ```c
+  ##  bool TTF_SetTextString(TTF_Text *text, const char *string, size_t length);
+  ##  ```
+  chk TTF_SetTextString(text, s.cstring, s.len.csize_t)
+
+proc SetTextColor*(text: Text, r: byte, g: byte, b: byte, a: byte) =
+  ##  ```c
+  ##  bool TTF_SetTextColor(TTF_Text *text, Uint8 r, Uint8 g, Uint8 b, Uint8 a);
+  ##  ```
+  chk TTF_SetTextColor(text, r, g, b, a)
+
+proc SetTextColor*(text: Text, c: Color) =
+  SetTextColor text, c.r, c.g, c.b, c.a
+
+proc DrawRendererText*(text: Text, x: float, y: float) =
+  ##  ```c
+  ##  bool TTF_DrawRendererText(TTF_Text *text, float x, float y);
+  ##  ```
+  chk TTF_DrawRendererText(text, x.cfloat, y.cfloat)
+
+proc DrawRendererText*(text: Text, x: int, y: int) =
+  DrawRendererText text, x.cfloat, y.cfloat
 
 # =========================================================================== #
 # ==  Helper functions                                                     == #

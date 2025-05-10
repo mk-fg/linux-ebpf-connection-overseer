@@ -53,8 +53,18 @@ template ensure_positive*(procname: string, body: untyped) =
     log_error procname, " failed: ", $SDL_GetError()
 
 template chk*(body: untyped) = # easy-to-use "returns true on success" check
-  let res {.inject.} = body
+  let res = body
   if unlikely res.uint == 0:
+    let name =
+      try: astToStr(body).replacef(re"^\s*([\w.]+).*", "$1")
+      except ValueError: astToStr(body)
+    raise SDLError.newException(name & " failed: " & $SDL_GetError())
+
+template chk_nil*(body: untyped) =
+  when result.typeof isnot ptr:
+    {.fatal: "chk_nil requires function that returns pointer".}
+  result = body
+  if unlikely result.isNil:
     let name =
       try: astToStr(body).replacef(re"^\s*([\w.]+).*", "$1")
       except ValueError: astToStr(body)

@@ -1,7 +1,7 @@
-# High level SDL 3.0 shared library wrapper for Nim
+# High level SDL3 shared library wrapper for Nim
 
 This is a heavily-modified version of [nsdl3] bindings module for
-[Simple Directmedia Layer library] (version 3.0+), only intended
+[Simple Directmedia Layer library] (version 3.x), only intended
 to be usable for this project, not including/implementing anything else,
 so probably not very useful outside of it.
 

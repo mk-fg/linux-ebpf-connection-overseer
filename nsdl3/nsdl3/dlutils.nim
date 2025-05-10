@@ -511,7 +511,6 @@ macro dlgencalls*(name: static string, libpaths: static openArray[string],
     init_name = newIdentNode "open_" & $soname & "_library"
     deinit_name = newIdentNode "close_" & $soname & "_library"
     dlerror_name = newIdentNode "last_" & $soname & "_error"
-    dlerror_str = "last_" & $soname & "_error"
 
   let
     procs = create_global_vars body
@@ -573,9 +572,6 @@ macro dlgencalls*(name: static string, libpaths: static openArray[string],
         `nills`
         `libhandle`.unloadLib
         `libhandle` = nil
-
-    proc dlerror*(): string {.deprecated: "Use " & `dlerror_str` & " instead.".} =
-      `dlerror_name`()
 
 template dlgencalls*(name: static string, libpath: static string,
                      body: untyped): untyped =

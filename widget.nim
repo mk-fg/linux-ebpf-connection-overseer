@@ -8,7 +8,8 @@
 import std/[ strutils, strformat, parseopt,
 	os, osproc, logging, re, tables, monotimes, base64 ]
 
-import nsdl3 as sdl # , nsdl3/ttf # XXX: ttf parts are missing atm
+# XXX: convert ensure_not_nil to simpler macros
+import nsdl3 as sdl
 
 {.passl: "-lcrypto"}
 proc SHA256( data: cstring, data_len: cint,
@@ -17,17 +18,20 @@ proc SHA256( data: cstring, data_len: cint,
 
 type Conf = object
 	win_title = "LECO Network-Monitor Widget"
-	win_ox = 20 # XXX: use with SDL3
-	win_oy = 40 # XXX: use with SDL3
+	win_ox = 20
+	win_oy = 40
 	win_w = 600
 	win_h = 400
+	win_px = 0
+	win_py = 0
 	win_upd_ns = 0.0
 	font_file = ""
 	font_h = 10
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
-	# color_fg = color(255, 255, 255, 0) # XXX
+	color_bg = Color(r:0, g:20, b:0, a:128)
+	color_fg = Color(r:33, g:74, b:206, a:255)
 	run_fifo = ""
 	run_debug = false
 	app_version = "0.1"
@@ -66,6 +70,8 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "init-offset-top": conf.win_oy = val.parseInt
 				of "init-width": conf.win_w = val.parseInt
 				of "init-height": conf.win_w = val.parseInt
+				of "pad-x": conf.win_px = val.parseInt
+				of "pad-y": conf.win_py = val.parseInt
 				of "frames-per-second-max":
 					let fps = val.parseFloat
 					if fps > 0: conf.win_upd_ns = 1_000_000_000 / fps
@@ -106,10 +112,12 @@ type
 		ns: CNS
 		line: string
 
+let ns_static = getMonoTime().ticks # XXX
 method conn_list(o: var NetConns, limit: int): seq[ConnInfo] {.base.} =
 	# XXX: returns N either most-recently-updated rows
 	# XXX: no need to return more than the window rows, as those should always fill it up
-	let ns = getMonoTime().ticks # for id/colors/hashes - line strings can change due to traffic counters
+	# let ns = getMonoTime().ticks # for id/colors/hashes - line strings can change due to traffic counters
+	let ns = ns_static
 	return @[
 		(ns: CNS(ns+1), line: "12:21 :: fraggod :: ssh [tmux.scope] :: somehost.net 22 :: v 7.3M / 13.9M ^"),
 		(ns: CNS(ns+2), line: "15:50 :: fraggod :: waterfox [waterfox.scope] :: github.com 443 :: v 4.2M / 8K ^"),
@@ -123,101 +131,118 @@ type
 		conn_list: proc (limit: int): seq[tuple[ns: CNS, line: string]]
 		win: Window
 		rdr: Renderer
-		# font: Font
 		tex: Texture
-		w, h, oy, ox, uid_w: int
+		txt_font: Font
+		txt_engine: TextEngine
+		txt: Text
+		ww, wh, tw, th, oy, uid_w: int
 		rows_draw = 0
 		rows: Table[CNS, PaintedRow]
+		closed = false
 	PaintedRow = object
 		n: int
 		ns: CNS
-		ns_update: int64
+		ts_update: int64
 		uid: string
 		uid_color: Color
 		line: string
+		replaced = true
 		updated = true
 
-method init(o: Painter) {.base.} =
-	discard
-	# assert o.font.sizeUtf8(cstring(o.conf.line_uid_fmt % (
-	# 	"W".repeat(o.conf.line_uid_chars) & " " )), o.uid_w.addr, o.h.addr) == 0
+method init(o: var Painter) {.base.} =
+	o.txt_font = sdl.OpenFont(o.conf.font_file, o.conf.font_h)
+	o.txt_engine = sdl.CreateRendererTextEngine(o.rdr)
+	o.txt = o.txt_engine.CreateText(o.txt_font, "", 0)
+	o.txt.SetTextColor(o.conf.color_fg) # XXX: other font/text parameters
+	let (w, _) = o.txt_font.GetStringSize(
+		o.conf.line_uid_fmt % ("W".repeat(o.conf.line_uid_chars) & " ") )
+	o.uid_w = w
+
+method close(o: var Painter) {.base.} =
+	if o.closed: return
+	o.txt.DestroyText()
+	o.txt_engine.DestroyRendererTextEngine()
+	o.txt_font.CloseFont()
+	o.closed = true
 
 method check_texture(o: var Painter) {.base.} =
+	## (Re-)Create texture matching window size, to (re-)render all text onto
 	var w, h: int
 	o.win.GetWindowSize(w, h)
 	if not o.tex.isNil:
-		if w == o.w and h == o.h: return
+		if w == o.ww and h == o.wh: return
 		o.tex.DestroyTexture()
-	let # XXX: sanity-check
-		pxfmt = o.win.GetWindowPixelFormat()
-		alpha = pxfmt.is_alpha()
-	echo &"----- win pxfmt-alpha check: {alpha}"
-	o.tex = o.rdr.CreateTexture( # XXX: use streaming texture
-		o.win.GetWindowPixelFormat(), sdl.TEXTUREACCESS_TARGET, w, h )
+	o.ww = w; o.wh = h
+	w -= 2*o.conf.win_px; h -= 2*o.conf.win_px;
+	o.tex = o.rdr.CreateTexture(
+		sdl.PIXELFORMAT_ARGB8888, sdl.TEXTUREACCESS_TARGET, w, h )
 	o.tex.SetTextureBlendMode(sdl.BLENDMODE_BLEND)
-
-	o.w = w; o.h = h
+	o.tw = w; o.th = h
 	o.oy = o.conf.line_h - o.conf.font_h
 	o.rows_draw = (h - o.oy) div o.conf.line_h
 	o.oy += ((h - o.oy) - o.rows_draw * o.conf.line_h) div o.rows_draw
 	o.rows.clear() # put up all fresh rows
 
-	o.rdr.SetRenderTarget(o.tex)
-	o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
-	o.rdr.SetRenderDrawColor(40, 0, 0, 128) # XXX
-	o.rdr.RenderClear()
-	o.rdr.SetRenderTarget()
-
-# method row_uid(o: Painter, ns: CNS): (string, CColor) {.base.} =
-# 	var
-# 		ns_str = $ns
-# 		uid_str = newString(32)
-# 	discard SHA256(ns_str.cstring, ns_str.len.cint, uid_str.cstring)
-# 	let
-# 		uid = uid_str.encode(safe=true)[0 .. o.conf.line_uid_chars]
-# 		uid_color = color(uid_str[0].uint8, uid_str[1].uint8, uid_str[2].uint8, 0)
-# 	return (uid, uid_color)
+method row_uid(o: Painter, ns: CNS): (string, Color) {.base.} =
+	var
+		ns_str = $ns
+		uid_str = newString(32)
+	discard SHA256(ns_str.cstring, ns_str.len.cint, uid_str.cstring)
+	let
+		uid = o.conf.line_uid_fmt % uid_str.encode(safe=true)[0 .. o.conf.line_uid_chars]
+		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
+	return (uid, uid_color)
 
 method row_get(o: var Painter, ns: CNS, line: string): PaintedRow {.base.} =
 	## Returns either matching PaintedRow or a new one,
 	##   replacing oldest row in a table if if's at full capacity.
 	let ts = getMonoTime().ticks
 	if o.rows.contains(ns): # update existing row
-		result = o.rows[ns]
+		result = o.rows[ns]; result.replaced = false
 		if result.line == line: result.updated = false
-		else: result.line = line; result.ns_update = ts; result.updated = true
+		else: result.line = line; result.ts_update = ts; result.updated = true
 		return
 	if o.rows.len < o.rows_draw:
 		result = PaintedRow(n: o.rows.len) # new row
 	else: # replace row
 		var ns0 = ts
 		for r in o.rows.values:
-			if r.ns_update <= ns0: ns0 = r.ns_update; result = r
+			if r.ts_update <= ns0: ns0 = r.ts_update; result = r
 		o.rows.del(result.ns)
-	result.ns = ns; result.ns_update = ts; result.line = line
-	# let (uid, uid_color) = o.row_uid(ns)
-	# result.uid = uid; result.uid_color = uid_color
+	result.ns = ns; result.ts_update = ts; result.line = line
+	(result.uid, result.uid_color) = o.row_uid(ns)
 	o.rows[ns] = result
 
 method draw(o: var Painter) {.base.} =
+	## Clear/update window contents buffer.
+	## Maintains single texture with all text lines in the right places,
+	##   and copies those to window with appropriate effects applied per-frame.
 	o.check_texture()
 	for conn in o.conn_list(o.rows_draw):
 		let row = o.row_get(conn.ns, conn.line)
 		if not row.updated: continue
-		# var
-		# 	surf = o.font.renderUtf8Blended(row.line.cstring, o.conf.color_fg)
-		# 	# XXX: render uid as well
-		# 	slice = rect(x=o.uid_w, y=cint(o.oy + row.n * o.conf.line_h), w=surf.w, h=surf.h)
-		# # XXX: use SDL_LockTexture / SDL_UnlockTexture instead
-		# o.tex.updateTexture(slice.addr, surf.pixels, surf.pitch)
-		# surf.freeSurface()
+		var y = row.n * o.conf.line_h
+		o.rdr.SetRenderTarget(o.tex)
+		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
+		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
+		o.rdr.RenderFillRect(0, y, o.tw, o.conf.line_h)
+		y += o.oy
+		if row.replaced:
+			o.txt.SetTextColor(row.uid_color)
+			o.txt.SetTextString(row.uid)
+			o.txt.DrawRendererText(0, y)
+			o.txt.SetTextColor(o.conf.color_fg)
+		o.txt.SetTextString(row.line)
+		o.txt.DrawRendererText(o.uid_w, y)
 
+	o.rdr.SetRenderTarget()
 	o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
-	o.rdr.SetRenderDrawColor(0, 40, 0, 128) # XXX
+	o.rdr.SetRenderDrawColor(o.conf.color_bg)
 	o.rdr.RenderClear()
 
-	# o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_BLEND)
-	# o.rdr.RenderCopy(o.tex, nil, nil)
+	# XXX: render row-rectangles with effects
+	o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_BLEND)
+	o.rdr.RenderTexture(o.tex, o.conf.win_px, o.conf.win_py, o.tw, o.th)
 
 
 proc main_help(err="") =
@@ -291,42 +316,38 @@ proc main(argv: seq[string]) =
 			&" to find one via 'fc-match {fc_lookup}' command (fontconfig)" )
 		conf.font_file = execProcess( "fc-match",
 			args=["-f", "%{file}", fc_lookup], options={poUsePath} ).strip
+	else: conf.font_file = conf.font_file.expandTilde()
 
-	template sdl_chk(condition: typed) =
-		if not condition: raise SDLError.newException( astToStr(condition)
-			.replacef(re"^\s*.*?([\w.]{5,}).*", "$1") & " failed :: SDL Error: " & last_sdl3_error() )
-	template sdl_chk0(condition: typed) = sdl_chk condition == 0
-
-	sdl_chk sdl.open_sdl3_library()
-	defer: sdl.close_sdl3_library()
+	if not (sdl.open_sdl3_library() and sdl.open_sdl3_ttf_library()):
+		raise SDLError.newException("Failed to open sdl3/sdl3_ttf libs")
+	defer: sdl.close_sdl3_library(); sdl.close_sdl3_ttf_library()
 	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS)
 	defer: sdl.Quit()
+	sdl.XTTFInit()
+	defer: sdl.XTTFQuit()
 	sdl.SetAppMetadata(conf.win_title, conf.app_version, conf.app_id)
-
-	# XXX: port ttf parts
-	# sdl_chk ttfInit()
-	# defer: ttfQuit()
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
 		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or sdl.WINDOW_RESIZABLE or
 			sdl.WINDOW_BORDERLESS or sdl.WINDOW_UTILITY or sdl.WINDOW_TRANSPARENT )
-	sdl_chk not win.isNil and not win_rdr.isNil
 	defer: win_rdr.DestroyRenderer(); win.DestroyWindow()
 	win_rdr.SetRenderVSync(true)
-
-	# XXX: port ttf parts
-	# sdl_init win_font: ttf.openFont(conf.font_file.cstring, conf.font_h.cint)
-	# defer: win_font.close()
+	win.SetWindowPosition(conf.win_ox, conf.win_oy)
+	let pxfmt = win.GetWindowPixelFormat()
+	if pxfmt != sdl.PIXELFORMAT_XRGB8888: warn(
+		"Potential issue - window pixel format is expected to always" &
+			&" be RGBX8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
 	# XXX: add bg thread that schedules render-UserEvents from NetConns read-loop
 	var
 		conns = NetConns(conf: conf)
-		paint = Painter( conf: conf, win: win, rdr: win_rdr, # XXX: font: win_font,
+		paint = Painter( conf: conf, win: win, rdr: win_rdr,
 			conn_list: (proc (rows: int): seq[ConnInfo] = return conns.conn_list(rows)) )
 		running = true
 		ev: sdl.Event
 	paint.init()
-	sdl_chk sdl.PushEvent(ev)
+	defer: paint.close()
+	assert sdl.PushEvent(ev)
 	while running:
 		while running and sdl.PollEvent(ev): # XXX: sdl.WaitEvent with render-UserEvents
 			case ev.typ
