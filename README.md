@@ -98,9 +98,11 @@ reading data from those eBPF map file descriptors.
 
 - [OpenSnitch] - GUI for interactive firewall setup when new connections are detected.
 - [netatop-bpf] - eBPF-based extension for [atop tool] to display per-process network traffic.
+- [Qtap] - much more powerful eBPF network-monitoring "agent" to even monitor encrypted connections.
 - [systemd-cgroup-nftables-policy-manager] - user-session cgroup-based firewall configuration helper.
 - [cgroup-skb.nonet.c] - very simple eBPF to block per-cgroup egress network access.
 
+[Qtap]: https://qpoint.io/qtap
 [atop tool]: https://www.atoptool.nl/
 [systemd-cgroup-nftables-policy-manager]:
   https://github.com/mk-fg/systemd-cgroup-nftables-policy-manager
