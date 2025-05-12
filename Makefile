@@ -13,6 +13,7 @@ LLC := llc
 STRIP := llvm-strip
 CMAKE := cmake
 NIM := nim
+SED := sed
 
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),x86_64)
@@ -57,10 +58,10 @@ BIN_LDFLAGS := $(LDFLAGS) $(BIN_EXTRA_LDFLAGS)
 BIN_STRIP := $(STRIP)
 
 
-all: leco-ebpf-load leco-sdl-widget
+all: leco-ebpf-load leco-sdl-widget leco-sdl-widget.ini
 
 clean:
-	rm -rf build leco-ebpf-load
+	rm -rf build leco-ebpf-load leco-sdl-widget leco-sdl-widget.ini
 
 .SUFFIXES:
 
@@ -105,12 +106,16 @@ build/tinyspline:
 
 build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspline/src/CMakeLists.txt) | build/tinyspline
 	$(CMAKE) -B build/tinyspline \
+		-DTINYSPLINE_BUILD_TESTS=False -DTINYSPLINE_ENABLE_CXX=False \
 		-DTINYSPLINE_BUILD_DOCS=False -DTINYSPLINE_BUILD_EXAMPLES=False \
 		-DCMAKE_INSTALL_PREFIX=build/tinyspline tinyspline
 	$(CMAKE) --build build/tinyspline --target install
 
-leco-sdl-widget: build/tinyspline/lib64/libtinyspline.a build/tinyspline/include/tinyspline.h
-	$(NIM) c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget widget.nim
+leco-sdl-widget.ini: widget.ini
+	$(SED) 's/^[^#\\[]/#\0/' $< > $@
+
+leco-sdl-widget: widget.nim build/tinyspline/lib64/libtinyspline.a build/tinyspline/include/tinyspline.h
+	$(NIM) c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget $<
 
 
 ###

@@ -9,26 +9,6 @@ import std/[ strutils, strformat, parseopt, math,
 	os, osproc, logging, re, tables, monotimes, base64 ]
 import nsdl3 as sdl
 
-{.passl: "-lcrypto"}
-proc SHA256( data: cstring, data_len: cint,
-	md_buf: cstring ): cstring {.importc, header: "<openssl/sha.h>".}
-
-{.passl: "-lm"}
-{.passl: "build/tinyspline/lib64/libtinyspline.a"}
-type
-	tsBSpline {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
-	tsStatus {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
-		code: cint
-		message: cstring
-{.push importc, header:"build/tinyspline/include/tinyspline.h".}
-proc ts_bspline_interpolate_cubic_natural( points: pointer,
-	num_points: csize_t, dimensions: csize_t, spline: ptr tsBSpline, status: ptr tsStatus ): cint
-proc ts_bspline_free(spline: ptr tsBSpline)
-proc ts_bspline_sample( spline: ptr tsBSpline, num: csize_t,
-	points: ptr ptr UncheckedArray[cdouble], actual_num: ptr csize_t, status: ptr tsStatus): cint
-{.pop.}
-proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
-
 
 type Conf = object
 	win_title = "LECO Network-Monitor Widget"
@@ -52,6 +32,28 @@ type Conf = object
 	run_debug = false
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
+
+
+{.passl: "-lcrypto"}
+proc SHA256( data: cstring, data_len: cint,
+	md_buf: cstring ): cstring {.importc, header: "<openssl/sha.h>".}
+
+{.passl: "-lm"}
+{.passl: "build/tinyspline/lib64/libtinyspline.a"}
+type
+	tsBSpline {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
+	tsStatus {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
+		code: cint
+		message: cstring
+{.push importc, header:"build/tinyspline/include/tinyspline.h".}
+proc ts_bspline_interpolate_cubic_natural( points: pointer,
+	num_points: csize_t, dimensions: csize_t, spline: ptr tsBSpline, status: ptr tsStatus ): cint
+proc ts_bspline_free(spline: ptr tsBSpline)
+proc ts_bspline_sample( spline: ptr tsBSpline, num: csize_t,
+	points: ptr ptr UncheckedArray[cdouble], actual_num: ptr csize_t, status: ptr tsStatus): cint
+{.pop.}
+proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
+
 
 proc parse_conf_file(conf_path: string): Conf =
 	# XXX: check that all parsed opts are in Conf and vice-versa
