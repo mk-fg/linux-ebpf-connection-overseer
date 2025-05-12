@@ -4,3 +4,6 @@
 [submodule "bpftool"]
 	path = bpftool
 	url = https://github.com/libbpf/bpftool.git
+[submodule "tinyspline"]
+	path = tinyspline
+	url = https://github.com/msteinbeck/tinyspline.git

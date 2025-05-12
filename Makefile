@@ -11,6 +11,8 @@ KERNEL_HEADERS := /usr/src/linux-headers-$(shell uname -r)/
 CC := clang
 LLC := llc
 STRIP := llvm-strip
+CMAKE := cmake
+NIM := nim
 
 ARCH := $(shell uname -m)
 ifeq ($(ARCH),x86_64)
@@ -55,7 +57,7 @@ BIN_LDFLAGS := $(LDFLAGS) $(BIN_EXTRA_LDFLAGS)
 BIN_STRIP := $(STRIP)
 
 
-all: leco-ebpf-load
+all: leco-ebpf-load leco-sdl-widget
 
 clean:
 	rm -rf build leco-ebpf-load
@@ -94,3 +96,21 @@ build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
 leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
 	$(CC) $< build/libbpf.a $(BIN_CFLAGS) $(BIN_LDFLAGS) -lelf -lz -lsystemd -o $@
 	$(BIN_STRIP) $@
+
+
+# nim leco-sdl-widget UI-tool
+
+build/tinyspline:
+	mkdir -p $@
+
+build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspline/src/CMakeLists.txt) | build/tinyspline
+	$(CMAKE) -B build/tinyspline \
+		-DTINYSPLINE_BUILD_DOCS=False -DTINYSPLINE_BUILD_EXAMPLES=False \
+		-DCMAKE_INSTALL_PREFIX=build/tinyspline tinyspline
+	$(CMAKE) --build build/tinyspline --target install
+
+leco-sdl-widget: build/tinyspline/lib64/libtinyspline.a build/tinyspline/include/tinyspline.h
+	$(NIM) c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget widget.nim
+
+
+###

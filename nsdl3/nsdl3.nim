@@ -813,37 +813,29 @@ proc RenderRect*(renderer: Renderer, x, y: float,
 # int SDL_RenderRects(SDL_Renderer *renderer, const SDL_FRect *rects,
 #     int count)
 
-proc RenderTexture*(renderer: Renderer, texture: Texture) =
-  ##  ```c
-  ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
-  ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
-  ##  ```
-  chk SDL_RenderTexture(renderer, texture, nil, nil)
-
-proc RenderTexture*(renderer: Renderer, texture: Texture, dst: FRect) =
-  ##  ```c
-  ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
-  ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
-  ##  ```
-  chk SDL_RenderTexture(renderer, texture, nil, dst.addr)
-
-# XXX: add similar with floats?
-proc RenderTexture*(renderer: Renderer, texture: Texture, x: int, y: int,
-                    w: int, h: int) =
-  ##  ```c
-  ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
-  ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
-  ##  ```
-  var dst: FRect = FRect(x: x.cfloat, y: y.cfloat, w: w.cfloat, h: h.cfloat)
-  chk SDL_RenderTexture(renderer, texture, nil, dst.addr)
-
-proc RenderTexture*(renderer: Renderer, texture: Texture, srcrect: FRect,
-                    dstrect: FRect) =
+proc RenderTexture*(renderer: Renderer, texture: Texture, srcrect: FRect, dstrect: FRect) =
   ##  ```c
   ##  int SDL_RenderTexture(SDL_Renderer *renderer, SDL_Texture *texture,
   ##                        const SDL_FRect *srcrect, const SDL_FRect *dstrect)
   ##  ```
   chk SDL_RenderTexture(renderer, texture, srcrect.addr, dstrect.addr)
+
+proc RenderTexture*(renderer: Renderer, texture: Texture, dst: FRect) =
+  chk SDL_RenderTexture(renderer, texture, nil, dst.addr)
+
+proc RenderTexture*(renderer: Renderer, texture: Texture) =
+  chk SDL_RenderTexture(renderer, texture, nil, nil)
+
+proc RenderTexture*(renderer: Renderer, texture: Texture, x: int, y: int, w: int, h: int) =
+  var dst = FRect(x: x.cfloat, y: y.cfloat, w: w.cfloat, h: h.cfloat)
+  chk SDL_RenderTexture(renderer, texture, nil, dst.addr)
+
+proc RenderTexture*(renderer: Renderer, texture: Texture,
+    sx: int, sy: int, sw: int, sh: int, dx: int, dy: int, dw: int, dh: int) =
+  var
+    src = FRect(x: sx.cfloat, y: sy.cfloat, w: sw.cfloat, h: sh.cfloat)
+    dst = FRect(x: dx.cfloat, y: dy.cfloat, w: dw.cfloat, h: dh.cfloat)
+  chk SDL_RenderTexture(renderer, texture, src.addr, dst.addr)
 
 proc RenderTextureRotated*(renderer: Renderer, texture: Texture,
                            srcrect: FRect, dstrect: FRect, angle: float,

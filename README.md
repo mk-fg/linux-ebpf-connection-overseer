@@ -77,20 +77,35 @@ reading data from those eBPF map file descriptors.
     ```
 
     Run `git submodule init && git submodule update` first to fetch
-    libbpf/bpftool build-dependencies.\
-    After that, `make` should produce `leco-ebpf-load` eBPF binary,
-    needed to start leco-event-pipe.
+    libbpf/bpftool build-dependencies. `make leco-ebpf-load` command
+    can be used to build only this `leco-ebpf-load` eBPF-loader binary.
 
 - [leco-event-pipe] script requires [python] (with ctypes) and [libbpf] installed,
-  uses fds/pins created by `leco-ebpf-load` that should be ran before it.
+  uses fds/pins created by `leco-ebpf-load`, that should be ran before it.
 
-- There should also be UI component(s) here - not implemented yet.
+- [leco-sdl-widget] requires [Nim] and [cmake] to build (including its [tinyspline]
+  submodule dependency), and only [SDL3] + [SDL3_ttf] (Simple DirectMedia Layer 3.x)
+  libraries installed on the system in order to run.
+
+  Will not work with older SDL versions 1.x or 2.x.
+
+  `git submodule init && git submodule update` needs to be run first
+  to fetch tinyspline build dependency library.
+  Can be built separately using `make leco-sdl-widget` command.
 
 [make]: https://www.gnu.org/software/make
 [clang]: https://clang.llvm.org/
 [llvm]: https://llvm.org/
+
 [python]: https://www.python.org/
 [libbpf]: https://github.com/libbpf/libbpf
+
+[leco-sdl-widget]: widget.nim
+[Nim]: https://nim-lang.org/
+[cmake]: https://cmake.org/
+[tinyspline]: https://github.com/msteinbeck/tinyspline/
+[SDL3]: https://libsdl.org/
+[SDL3_ttf]: https://github.com/libsdl-org/SDL_ttf
 
 
 <a name=hdr-links></a>
