@@ -20,12 +20,12 @@ type Conf = object
 	win_py = 0
 	win_upd_ns = 0.0
 	font_file = ""
-	font_h = 10
+	font_h = 14
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
 	line_fade_ns: int64 = 60 * 1_000_000_000
-	line_fade_spline = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
+	line_fade_curve = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
 	color_bg = Color(r:0, g:12, b:0, a:40)
 	color_fg = Color(r:0xe4, g:0xe4, b:0xe4, a:0xff)
 	run_fifo = ""
@@ -68,25 +68,24 @@ proc parse_conf_file(conf_path: string): Conf =
 		conf_text_hx = 1.5
 		conf_text_gap = 0
 
-	proc parse_tween(val: string): tuple[y0: float, y1: float, points: seq[float]] =
+	proc parse_curve(val: string): tuple[y0: float, y1: float, points: seq[float]] =
 		var
 			a, b: float
 			ab_set = false
 			points: seq[float]
-		for s in val.replace(',', ' ').splitWhitespace():
+		for s in val.multireplace([("("," "),(")"," "),(","," ")]).splitWhitespace():
 			if s.startswith("range="):
 				let ss = s[6..^1].split(':', 1)
 				a = ss[0].parseFloat; b = ss[1].parseFloat; ab_set = true
 			else: points.add(s.parseFloat)
+		debug(&"line-fade-curve: parsed point values = {points}")
 		if points.len %% 2 != 0: raise ValueError.newException(
-			"fade-out-tween: odd number of x-y values, must be even" )
+			"line-fade-curve: odd number of x-y values, must be even" )
 		if a == 0 and b == 0:
-			a = points[^1]; b = points[1]
+			a = points[1]; b = points[^1]
 			if a > b: a = b; b = a
-		if points[1] < points[^1]: # flip all y values
-			let d = a + b
-			for n in countup(1, points.len - 1, 2): points[n] = d - points[n]
-		return (y0: a, y1: b, points: points)
+		result = (y0: a, y1: b, points: points)
+		debug(&"line-fade-curve: final shape {result}")
 
 	template section(sec: string, checks: typed) =
 		if name == sec and key != "":
@@ -123,8 +122,8 @@ proc parse_conf_file(conf_path: string): Conf =
 					if val.contains("."): conf_text_hx = val.parseFloat
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parseInt
 					else: conf_text_hx = val.parseFloat * -1
-				of "fade-out-time": conf.line_fade_ns = int64(val.parseFloat * 1e9)
-				of "fade-out-tween": conf.line_fade_spline = parse_tween(val)
+				of "line-fade-time": conf.line_fade_ns = int64(val.parseFloat * 1e9)
+				of "line-fade-curve": conf.line_fade_curve = parse_curve(val)
 				else: section_val_unknown
 			section "run":
 				case key:
@@ -196,9 +195,9 @@ type
 
 method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
 	let
-		pts = o.conf.line_fade_spline.points
-		y0 = o.conf.line_fade_spline.y0
-		ys = o.conf.line_fade_spline.y1 - y0
+		pts = o.conf.line_fade_curve.points
+		y0 = o.conf.line_fade_curve.y0
+		ys = o.conf.line_fade_curve.y1 - y0
 		x0 = pts[0]
 		xs = pts[^2] - x0
 		xns = o.conf.line_fade_ns
@@ -219,12 +218,12 @@ method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
 		discard ts_bspline_sample(
 			s.addr, samples_n, samples_ptr.addr, samples_n.addr, st.addr )
 	if st.code != 0: raise ValueError.newException(
-		"Failed to interpolate/sample fade-out spline [{st.code}]: {st.message}" )
+		"Failed to interpolate/sample line-fade-curve [{st.code}]: {st.message}" )
 	defer: c_free(samples_ptr)
 	let ss = cast[ptr UncheckedArray[cdouble]](samples_ptr[])
 	for n in countup(0, (samples_n.int - 1) * 2, 2):
 		let a = round(255 * ((ss[n+1] - y0) / ys).clamp(0, 1.0)).byte
-		# echo &"{ss[n]} {ss[n+1]}" # https://www.graphreader.com/plotter can be used to plot this
+		# echo &"{ss[n]} {ss[n+1]}" # https://www.graphreader.com/plotter can plot this
 		if result.len > 0 and a == a0: continue
 		a0 = a; result.add((int64(float(xns) * (ss[n] - x0) / xs).clamp(0, xns), a))
 

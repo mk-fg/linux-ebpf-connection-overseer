@@ -87,7 +87,7 @@ reading data from those eBPF map file descriptors.
   submodule dependency), and only [SDL3] + [SDL3_ttf] (Simple DirectMedia Layer 3.x)
   libraries installed on the system in order to run.
 
-  Will not work with older SDL versions 1.x or 2.x.
+  Will not work with older SDL 1.x and 2.x library branches (different API).
 
   `git submodule init && git submodule update` needs to be run first
   to fetch tinyspline build dependency library.
