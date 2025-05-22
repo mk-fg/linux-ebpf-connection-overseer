@@ -73,13 +73,13 @@ proc parse_conf_file(conf_path: string): Conf =
 			a, b: float
 			ab_set = false
 			points: seq[float]
-		for s in val.multireplace([("("," "),(")"," "),(","," ")]).splitWhitespace():
+		for s in val.multireplace([("("," "),(")"," "),(","," ")]).split_whitespace():
 			if s.startswith("range="):
 				let ss = s[6..^1].split(':', 1)
-				a = ss[0].parseFloat; b = ss[1].parseFloat; ab_set = true
-			else: points.add(s.parseFloat)
+				a = ss[0].parse_float; b = ss[1].parse_float; ab_set = true
+			else: points.add(s.parse_float)
 		debug(&"line-fade-curve: parsed point values = {points}")
-		if points.len %% 2 != 0: raise ValueError.newException(
+		if points.len %% 2 != 0: raise ValueError.new_exception(
 			"line-fade-curve: odd number of x-y values, must be even" )
 		if a == 0 and b == 0:
 			a = points[1]; b = points[^1]
@@ -95,7 +95,7 @@ proc parse_conf_file(conf_path: string): Conf =
 			key = ""
 	template section_val_unknown = warn(
 		&"Ignoring unrecognized config-option line {line_n} under [{name}] :: {line}" )
-	for line in (readFile(conf_path) & "\n[end]").splitLines:
+	for line in (readFile(conf_path) & "\n[end]").split_lines:
 		line_n += 1
 		if line =~ re_comm: continue
 		elif line =~ re_name: name = matches[0]
@@ -104,25 +104,25 @@ proc parse_conf_file(conf_path: string): Conf =
 			section "window":
 				case key:
 				of "title": conf.win_title = val
-				of "init-offset-left": conf.win_ox = val.parseInt
-				of "init-offset-top": conf.win_oy = val.parseInt
-				of "init-width": conf.win_w = val.parseInt
-				of "init-height": conf.win_w = val.parseInt
-				of "pad-x": conf.win_px = val.parseInt
-				of "pad-y": conf.win_py = val.parseInt
+				of "init-offset-left": conf.win_ox = val.parse_int
+				of "init-offset-top": conf.win_oy = val.parse_int
+				of "init-width": conf.win_w = val.parse_int
+				of "init-height": conf.win_w = val.parse_int
+				of "pad-x": conf.win_px = val.parse_int
+				of "pad-y": conf.win_py = val.parse_int
 				of "frames-per-second-max":
-					let fps = val.parseFloat
+					let fps = val.parse_float
 					if fps > 0: conf.win_upd_ns = 1_000_000_000 / fps
 				else: section_val_unknown
 			section "text":
 				case key:
 				of "font": conf.font_file = val
-				of "font-height": conf.font_h = val.parseInt
+				of "font-height": conf.font_h = val.parse_int
 				of "line-height":
-					if val.contains("."): conf_text_hx = val.parseFloat
-					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parseInt
-					else: conf_text_hx = val.parseFloat * -1
-				of "line-fade-time": conf.line_fade_ns = int64(val.parseFloat * 1e9)
+					if val.contains("."): conf_text_hx = val.parse_float
+					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
+					else: conf_text_hx = val.parse_float * -1
+				of "line-fade-time": conf.line_fade_ns = int64(val.parse_float * 1e9)
 				of "line-fade-curve": conf.line_fade_curve = parse_curve(val)
 				else: section_val_unknown
 			section "run":
@@ -131,7 +131,7 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "debug": conf.run_debug = case val
 					of "y","yes","true","1","on": true
 					of "n","no","false","0","off": false
-					else: raise ValueError.newException("Unrecognized boolean value")
+					else: raise ValueError.new_exception("Unrecognized boolean value")
 				else: section_val_unknown
 			if key != "": warn( "Unrecognized config" &
 				&" section [{name}] for '{key}' value on line {line_n} :: {line}" )
@@ -154,7 +154,7 @@ type
 		ns: CNS
 		line: string
 
-let ns_static = getMonoTime().ticks # XXX
+let ns_static = get_mono_time().ticks # XXX
 method conn_list(o: var NetConns, limit: int): seq[ConnInfo] =
 	# XXX: returns N either most-recently-updated rows
 	# XXX: no need to return more than the window rows, as those should always fill it up
@@ -217,7 +217,7 @@ method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
 		defer: ts_bspline_free(s.addr)
 		discard ts_bspline_sample(
 			s.addr, samples_n, samples_ptr.addr, samples_n.addr, st.addr )
-	if st.code != 0: raise ValueError.newException(
+	if st.code != 0: raise ValueError.new_exception(
 		"Failed to interpolate/sample line-fade-curve [{st.code}]: {st.message}" )
 	defer: c_free(samples_ptr)
 	let ss = cast[ptr UncheckedArray[cdouble]](samples_ptr[])
@@ -277,7 +277,7 @@ method row_get(o: var Painter, ns: CNS, line: string, ts_loop: int64 = 0): Paint
 	## Returns either matching PaintedRow or a new one,
 	##   replacing oldest row in a table if if's at full capacity.
 	var ts = ts_loop
-	if ts == 0: ts = getMonoTime().ticks
+	if ts == 0: ts = get_mono_time().ticks
 	if o.rows.contains(ns): # update existing row
 		result = o.rows[ns]; result.replaced = false
 		if result.line == line: result.updated = false
@@ -299,7 +299,7 @@ method draw(o: var Painter) =
 	## Maintains single texture with all text lines in the right places,
 	##   and copies those to window with appropriate effects applied per-frame.
 	let
-		ts = getMonoTime().ticks
+		ts = get_mono_time().ticks
 		new_texture = o.check_texture()
 
 	# Update any new/changed rows on the texture
@@ -352,7 +352,7 @@ proc main_help(err="") =
 	proc print(s: string) =
 		let dst = if err == "": stdout else: stderr
 		write(dst, s); write(dst, "\n")
-	let app = getAppFilename().lastPathPart
+	let app = get_app_filename().last_path_part
 	if err != "": print &"ERROR: {err}"
 	print &"\nUsage: {app} [options] <config.ini>"
 	if err != "": print &"Run '{app} --help' for more information"; quit 1
@@ -385,18 +385,18 @@ proc main(argv: seq[string]) =
 			if opt_last == "": return
 			main_help &"{opt_fmt(opt_last)} option unrecognized or requires a value"
 		proc opt_set(k: string, v: string) =
-			# if k in ["x", "some-delay"]: opt_some_delay = parseFloat(v)
+			# if k in ["x", "some-delay"]: opt_some_delay = parse_float(v)
 			main_help &"Unrecognized option [ {opt_fmt(k)} = {v} ]"
 
 		for t, opt, val in getopt(argv):
 			case t
-			of cmdEnd: break
-			of cmdShortOption, cmdLongOption:
+			of cmd_end: break
+			of cmd_short_option, cmd_long_option:
 				if opt in ["h", "help"]: main_help()
 				elif opt in ["d", "debug"]: opt_debug = true
 				elif val == "": opt_empty_check(); opt_last = opt
 				else: opt_set(opt, val)
-			of cmdArgument:
+			of cmd_argument:
 				if opt_last != "": opt_set(opt_last, opt); opt_last = ""
 				elif opt_conf_file == "": opt_conf_file = opt
 				else: main_help(&"Unrecognized argument: {opt}")
@@ -405,24 +405,24 @@ proc main(argv: seq[string]) =
 		if opt_conf_file == "":
 			main_help "Missing required configuration file argument"
 
-	var logger = newConsoleLogger(
-		fmtStr="$levelid $datetime :: ", useStderr=true,
-		levelThreshold=lvlAll, flushThreshold=lvlWarn )
-	addHandler(logger)
-	setLogFilter(if opt_debug: lvlAll else: lvlInfo)
+	var logger = new_console_logger(
+		fmt_str="$levelid $datetime :: ", use_stderr=true,
+		level_threshold=lvl_all, flush_threshold=lvl_warn )
+	add_handler(logger)
+	set_log_filter(if opt_debug: lvl_all else: lvl_info)
 	var conf = parse_conf_file(opt_conf_file)
-	setLogFilter(if conf.run_debug or opt_debug: lvlAll else: lvlInfo)
+	set_log_filter(if conf.run_debug or opt_debug: lvl_all else: lvl_info)
 
 	if conf.font_file == "":
 		let fc_lookup = "sans:lang=en"
 		warn( "No font path specified for text.font option, trying" &
 			&" to find one via 'fc-match {fc_lookup}' command (fontconfig)" )
-		conf.font_file = execProcess( "fc-match",
-			args=["-f", "%{file}", fc_lookup], options={poUsePath} ).strip
+		conf.font_file = exec_process( "fc-match",
+			args=["-f", "%{file}", fc_lookup], options={po_use_path} ).strip
 	else: conf.font_file = conf.font_file.expandTilde()
 
 	if not (sdl.open_sdl3_library() and sdl.open_sdl3_ttf_library()):
-		raise SDLError.newException("Failed to open sdl3/sdl3_ttf libs")
+		raise SDLError.new_exception("Failed to open sdl3/sdl3_ttf libs")
 	defer: sdl.close_sdl3_library(); sdl.close_sdl3_ttf_library()
 	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS)
 	defer: sdl.Quit()
@@ -461,4 +461,4 @@ proc main(argv: seq[string]) =
 		paint.draw()
 		win_rdr.RenderPresent()
 
-when is_main_module: main(os.commandLineParams())
+when is_main_module: main(os.command_line_params())
