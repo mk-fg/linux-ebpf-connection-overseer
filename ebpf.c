@@ -1,5 +1,6 @@
 // Docs: https://docs.ebpf.io/
 
+// XXX: test incoming conns and wg tunnels
 // XXX: add traffic counters for conns, events on those getting updates
 // XXX: test how connect-returns work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through

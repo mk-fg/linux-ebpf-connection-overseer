@@ -42,17 +42,19 @@ Intended to consist of several components:
 
     [leco.service] systemd unit file can be used to run loader binary and start this script.
 
-- User session tool to read that json data and visualize in some useful way - not implemented yet.
+- Desktop session [leco-sdl-widget] to read that data and visualize in a relatively simple way.
 
 It's kinda similar to [OpenSnitch] and [netatop-bpf] projects (and is partly based
-on those), with simple non-interactive read-only scope, and no extra access beyond
-reading data from those eBPF map file descriptors.
+on those), with simple non-interactive read-only scope, conky-like transparent
+window/overlay graphical frontend, and privileged access limited to reading data
+from eBPF map fds.
 
 [leco-ebpf-load]: loader.c
 [eBPF]: https://docs.ebpf.io/
 [File Descriptor Store]: https://systemd.io/FILE_DESCRIPTOR_STORE/
 [leco-event-pipe]: leco-event-pipe
 [leco.service]: leco.service
+[leco-sdl-widget]: widget.nim
 [OpenSnitch]: https://github.com/evilsocket/opensnitch
 [netatop-bpf]: https://github.com/bytedance/netatop-bpf
 
@@ -100,7 +102,6 @@ reading data from those eBPF map file descriptors.
 [python]: https://www.python.org/
 [libbpf]: https://github.com/libbpf/libbpf
 
-[leco-sdl-widget]: widget.nim
 [Nim]: https://nim-lang.org/
 [cmake]: https://cmake.org/
 [tinyspline]: https://github.com/msteinbeck/tinyspline/

@@ -143,7 +143,7 @@ proc PushEvent*(event: var Event): bool {.inline.} =
   ##  ```c
   ##  int SDL_PushEvent(SDL_Event *event)
   ##  ```
-  SDL_PushEvent event.addr
+  {.cast(gcsafe).}: SDL_PushEvent(event.addr)
 
 # Uint32 SDL_RegisterEvents(int numevents)
 

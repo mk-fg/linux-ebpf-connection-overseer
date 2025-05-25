@@ -4,14 +4,25 @@
 #  https://docs.ebpf.io/ebpf-library/libbpf/userspace/
 #  https://libbpf.readthedocs.io/en/latest/api.html
 
-import ctypes as ct, socket as so, ipaddress as ip, pathlib as pl
-import os, sys, re, struct, errno, time, json, signal, select
+import ctypes as ct, socket as so, collections as cs, ipaddress as ip, pathlib as pl
+import os, sys, re, struct, errno, time, json, pwd, signal, select, random
 
 
 class adict(dict):
 	def __init__(self, *args, **kws):
 		super().__init__(*args, **kws)
 		self.__dict__ = self
+
+def sz_repr(sz, _units=list(reversed(
+		list((u, 2 ** (i * 10)) for i, u in enumerate('BKMGT')) ))):
+	for u, u1 in _units:
+		if sz > u1: break
+	return f'{sz / u1:.1f}'.removesuffix('.0') + u
+
+def pick(*picks): # XXX: for fake data
+	for c, a, b in picks:
+		if random.random() <= c: break
+	return round(a + random.random() * (b - a))
 
 def openat2(p, mode='r', _cache=[]):
 	'More flexible open() that avoids symlink-related race-conditions'
@@ -38,6 +49,34 @@ def openat2(p, mode='r', _cache=[]):
 	mode = mode.translate(dict.fromkeys(ord(c) for c in 'ct'))
 	return open(_cache[0](p, flags | os.O_CLOEXEC), mode)
 
+class TimedCacheDict(cs.UserDict):
+	'dict that has values expire and get removed on timeout'
+	__slots__, _no_value = ('data', 'ts', 'ts_min', 'timeout', 'bump_on_get'), object()
+	timeout_cleanup_slack = 1.5 # oldest-timeout multiplier to cache cleanup
+	def __init__(self, timeout, bump_on_get=True):
+		self.ts, self.ts_min = dict(), None
+		self.timeout, self.bump_on_get = timeout, bump_on_get
+		super().__init__()
+	def cache(self, k, v=_no_value):
+		ts, get_op = time.monotonic(), v is self._no_value
+		if get_op and (ts - self.ts.get(k, 0)) > self.timeout: raise KeyError(k)
+		if not get_op or self.bump_on_get: self.ts[k] = ts
+		v = super().__getitem__(k) if get_op else super().__setitem__(k, v)
+		if not self.ts_min: self.ts_min = ts; return v
+		elif get_op or ts - self.ts_min <= self.timeout * self.timeout_cleanup_slack: return v
+		for k, ts0 in sorted(self.ts.items(), key=lambda kv: kv[1]):
+			if ts - ts0 > self.timeout: self.pop(k, None); del self.ts[k]; continue
+			self.ts_min = ts0; break
+		else: self.ts_min = None
+		return v
+	def __iter__(self):
+		for k in self.data:
+			if k in self: yield k
+	def __contains__(self, k):
+		return k in self.data and (time.monotonic() - self.ts.get(k, 0)) <= self.timeout
+	def __getitem__(self, k): return self.cache(k)
+	def __setitem__(self, k, v): return self.cache(k, v)
+
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
 err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
@@ -56,16 +95,17 @@ class BPFMap:
 
 	_libbpf = None # needed for ringbuf_process_ring asm to process data
 	@classmethod
-	def libbpf_init(self):
+	def global_init(cls): # caches are shared between map subclasses
 		if BPFMap._libbpf: return
 		lib = BPFMap._libbpf = ct.CDLL('libbpf.so.1', use_errno=True)
 		ptr, cint, cuint, cvoid = ct.POINTER, ct.c_int, ct.c_uint, ct.c_void_p
-		lib.ring_buffer__new.argtypes = cint, self._rb_handler_t, cvoid, cvoid
-		lib.ring_buffer__new.restype = ptr(self._rb_struct)
-		lib.ring_buffer__poll.argtypes = ptr(self._rb_struct), cint
-		lib.bpf_map_get_info_by_fd.argtypes = cint, ptr(self._map_info), ptr(cuint)
+		lib.ring_buffer__new.argtypes = cint, cls._rb_handler_t, cvoid, cvoid
+		lib.ring_buffer__new.restype = ptr(cls._rb_struct)
+		lib.ring_buffer__poll.argtypes = ptr(cls._rb_struct), cint
+		lib.bpf_map_get_info_by_fd.argtypes = cint, ptr(cls._map_info), ptr(cuint)
 		lib.bpf_map_lookup_batch.argtypes = ( cint,
-			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(self._map_batch_opts) )
+			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(cls._map_batch_opts) )
+		BPFMap._user_cache = TimedCacheDict(5*60)
 
 	fd = fd_close = None
 	def map_fd(self, fd=None, path=None):
@@ -77,21 +117,35 @@ class BPFMap:
 			self.fd_close = True
 		self.fd = fd; return fd
 
-	def ev_parse( self, ev, o=0,
-			_st=struct.Struct('<BQ16s16sHHII16s'), _ct_proto='tcp udp x'.split(),
-			_fields='ct ns saddr daddr sport dport pid uid comm'.split(),
-			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
-		ev = adict(zip(_fields, _st.unpack_from(ev, offset=o)))
-		if not ev.ct: return
-		ev.proto, (ev.af, n) = _ct_proto[(ev.ct-1)//2], _ct_af[ev.ct%2]
-		for k in 'saddr', 'daddr': ev[k] = ip.ip_address(ev[k][:n])
-		ev.comm = ev.comm.rstrip(b'\0').decode()
-		return ev
-
 	def __enter__(self): return self
 	def __exit__(self, *err): self.close()
 	def close(self):
 		if self.fd_close and self.fd is not None: os.close(self.fd); self.fd = None
+
+	def ev_parse( self, ev, o=0,
+			_st=struct.Struct('<BQ16s16sHHII16s'), _ct_proto='tcp udp x'.split(),
+			_fields='ct ns saddr daddr sport dport pid uid comm'.split(),
+			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
+		e = adict(zip(_fields, _st.unpack_from(ev, offset=o)))
+		if not e.ct: return
+		e.proto, (e.af, n) = _ct_proto[(e.ct-1)//2], _ct_af[e.ct%2]
+		for k in 'saddr', 'daddr': e[k] = ip.ip_address(e[k][:n])
+		e.comm = e.comm.rstrip(b'\0').decode()
+		e.rx, e.tx = (pick( (0.3, 30, 950), (0.4, 1e3, 700e3), # XXX: fake data
+			(0.4, 500e3, 900e6), (0.2, 500e3, 100e9), (1.0, 100, 800e3) ) for n in range(2))
+
+		ev = adict(ns=e.ns)
+		if not (u := self._user_cache.get(e.uid)):
+			try: u = pwd.getpwuid(e.uid).pw_name
+			except KeyError: u = str(e.uid)
+			self._user_cache[e.uid] = u
+		# XXX: aliases for ports, resolve addrs to hosts/asns
+		ev.line = ' :: '.join([ # XXX: "comm [cgroup]" instead of just comm
+			time.strftime('%H:%M', time.localtime(e.ns / 1e9)),
+			u, re.sub(r'::+', ':', e.comm),
+			f'{e.daddr} {e.dport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
+			f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' ])
+		return ev
 
 class BPFMapRingTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
@@ -99,7 +153,7 @@ class BPFMapRingTable(BPFMap):
 	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway.
 
 	def __init__(self, fd=None, path=None):
-		self.libbpf_init()
+		self.global_init()
 		self.fd, info_fn = self.map_fd(fd, path), self._libbpf.bpf_map_get_info_by_fd
 		info, n = self._map_info(), ct.c_uint(n0 := ct.sizeof(self._map_info))
 		if info_fn(self.fd, ct.byref(info), ct.byref(n)) or n.value < n0 or info.key != 4:
@@ -130,7 +184,7 @@ class BPFMapRingTable(BPFMap):
 class BPFMapRingBuffer(BPFMap):
 
 	def __init__(self, fd=None, path=None):
-		self.libbpf_init()
+		self.global_init()
 		self.updates, self.handler = list(), self._rb_handler_t(self._ev_handler)
 		self.rb = self._libbpf.ring_buffer__new(self.map_fd(fd, path), self.handler, None, None)
 		if not self.rb: raise BPFError(f'libbpf ring_buffer__new failed [fd={fd} path={path}]')
@@ -151,20 +205,18 @@ class BPFMapRingBuffer(BPFMap):
 
 
 def stream_events(table, rb, dst, replay_limit=None):
-	def _dst_write(ev, ts, ns):
-		ev.saddr, ev.daddr = str(ev.saddr), str(ev.daddr)
-		ev.ts = ts - (ns - ev.ns) / 1_000_000_000
+	def _dst_write(ev, ns):
 		try: dst.write(json.dumps(ev)); dst.write('\n'); dst.flush()
 		except BrokenPipeError: # pipe closed
 			if dst is sys.stdout: os.dup2(os.open(
 				os.devnull, os.O_WRONLY ), dst.fileno())
 			return True
 	with select.epoll(sizehint=2) as poll:
-		ns_table, ns_cutoff, ts, ns = 0, 0, time.time(), time.monotonic_ns()
+		ns_table, ns_cutoff, ns = 0, 0, time.monotonic_ns()
 		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
 		for ev in sorted(table.read(), key=lambda ev: ev.ns):
 			if (ns_table := ev.ns) < ns_cutoff: continue
-			if _dst_write(ev, ts, ns): return
+			if _dst_write(ev, ns): return
 		poll.register(dst_fd := dst.fileno(), 0)
 		poll.register(rb.fd, select.EPOLLIN)
 		while True:
@@ -172,7 +224,7 @@ def stream_events(table, rb, dst, replay_limit=None):
 			if ev_fds[0][0] == dst_fd: break # dst pipe closed
 			for ev in rb.wait(0.1): # shouldn't actually need to wait
 				if ev.ns <= ns_table or ev.ns < ns_cutoff: continue
-				if _dst_write(ev, time.time(), time.monotonic_ns()): return
+				if _dst_write(ev, time.monotonic_ns()): return
 			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
 
 def main(argv=None):
