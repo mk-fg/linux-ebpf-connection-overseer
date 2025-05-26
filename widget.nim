@@ -57,6 +57,12 @@ proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
 
 
 var log_lock: Lock
+proc log_init(debug: bool) =
+	var logger = new_console_logger(
+		fmt_str="$levelid $datetime :: ", use_stderr=true,
+		level_threshold=lvl_all, flush_threshold=lvl_warn )
+	add_handler(logger)
+	set_log_filter(if debug: lvl_all else: lvl_info)
 template log_debug(args: varargs[string, `$`]) =
 	with_lock log_lock: log(lvl_debug, args)
 template log_warn(args: varargs[string, `$`]) =
@@ -168,40 +174,78 @@ proc parse_conf_file(conf_path: string): Conf =
 	return conf
 
 
-{.push base.}
-
 type
 	CNS = int64 # nanoseconds-based connection ID
 	ConnInfo = tuple
 		ns: CNS
 		line: string
-	ConnInfoBuffer = object
+	ConnInfoBuffer = ptr object
 		n, m: int # list = [n, m) + [0, n)
 		buff: UncheckedArray[ConnInfo]
-	NetConns = object
-		conf: Conf
-		conns: ptr ConnInfoBuffer
 
-var # ConnInfoBuffer shared with fifo-reader thread
-	fifo_buff: pointer
-	fifo_buff_lock: Lock
+var # shared with fifo-conn-reader thread
+	conn_buff: ConnInfoBuffer
+	conn_buff_lock: Lock
 
-method init(o: var NetConns) =
-	o.conns = cast[ptr ConnInfoBuffer](fifo_buff)
-
-method close(o: var NetConns) = discard
-
-method list(o: var NetConns, limit: int): seq[ConnInfo] =
+proc conn_list(limit: int): seq[ConnInfo] =
 	## Returns specified number of last-changed connections to display in a window.
 	var line: string # make sure to not ref shallow-copied strings shared with thread
 	template append =
 		if result.len >= limit: break
-		let ev = o.conns.buff[n]
+		let ev = conn_buff.buff[n]
 		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
-	with_lock fifo_buff_lock:
-		for n in countdown(o.conns.n, 0): append
-		for n in countdown(o.conns.m-1, o.conns.n+1): append
+	with_lock conn_buff_lock:
+		for n in countdown(conn_buff.n, 0): append
+		for n in countdown(conn_buff.m-1, conn_buff.n+1): append
 
+proc conn_reader(conf: Conf) {.thread, gcsafe.} =
+	## Daemon thread that populates conn_buff.
+	log_init(conf.run_debug) # logging setup is thread-local
+	var
+		fifo: File
+		fifo_dir = conf.run_fifo.parent_dir
+		n = 0
+		conn: ConnInfo
+	while true:
+		block fifo_inotify_open:
+			try: fifo = open(conf.run_fifo, fm_read); break fifo_inotify_open
+			except IOError as e: log_debug(&"fifo: [ {e.msg} ] - will wait for it")
+			var ino_fd = inotify_init()
+			defer:
+				if close(ino_fd.cint) != 0:
+					raise IOError.new_exception("fifo: inotify close failed")
+			let wd = ino_fd.inotify_add_watch( fifo_dir.cstring,
+				IN_OPEN or IN_CREATE or IN_MOVED_TO or IN_ATTRIB )
+			defer: discard ino_fd.inotify_rm_watch(wd)
+			var ino_evs: array[2048, byte]
+			while true:
+				if n == 0:
+					try: fifo = open(conf.run_fifo, fm_read); break
+					except IOError as e: log_debug(&"fifo: [ {e.msg} ] - waiting for it")
+				n = read(ino_fd, ino_evs.addr, 2048)
+				if n <= 0: raise IOError.new_exception("fifo: inotify read failed")
+				for e in inotify_events(ino_evs.addr, n):
+					let name = $cast[cstring](e[].name.addr)
+					if conf.run_fifo.extract_filename != name.extract_filename: continue
+					log_debug(&"fifo: create/change event detected for [ {name} ]")
+					n = 0; break
+		defer: fifo.close()
+		log_debug("fifo: connected")
+		for ev in fifo.lines:
+			if ev.strip.len == 0: continue
+			try:
+				let ej = ev.parse_json
+				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
+			except ValueError as e:
+				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
+			with_lock conn_buff_lock:
+				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
+				let k = (conn_buff.n + 1) %% conf.run_fifo_buff_sz
+				conn_buff.buff[k] = conn; conn_buff.n = k
+			sdl_update_set()
+
+
+{.push base.}
 
 type
 	Painter = object
@@ -386,58 +430,6 @@ method draw(o: var Painter): bool =
 {.pop.}
 
 
-proc main_init_logger(debug: bool) =
-	var logger = new_console_logger(
-		fmt_str="$levelid $datetime :: ", use_stderr=true,
-		level_threshold=lvl_all, flush_threshold=lvl_warn )
-	add_handler(logger)
-	set_log_filter(if debug: lvl_all else: lvl_info)
-
-proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
-	main_init_logger(conf.run_debug) # logging setup is thread-local
-	var
-		fifo: File
-		fifo_dir = conf.run_fifo.parent_dir
-		n = 0
-		cs = cast[ptr ConnInfoBuffer](fifo_buff)
-		conn: ConnInfo
-	while true:
-		block fifo_inotify_open:
-			try: fifo = open(conf.run_fifo, fm_read); break fifo_inotify_open
-			except IOError as e: log_debug(&"fifo: [ {e.msg} ] - will wait for it")
-			var ino_fd = inotify_init()
-			defer:
-				if close(ino_fd.cint) != 0:
-					raise IOError.new_exception("fifo: inotify close failed")
-			let wd = ino_fd.inotify_add_watch( fifo_dir.cstring,
-				IN_OPEN or IN_CREATE or IN_MOVED_TO or IN_ATTRIB )
-			defer: discard ino_fd.inotify_rm_watch(wd)
-			var ino_evs: array[2048, byte]
-			while true:
-				if n == 0:
-					try: fifo = open(conf.run_fifo, fm_read); break
-					except IOError as e: log_debug(&"fifo: [ {e.msg} ] - waiting for it")
-				n = read(ino_fd, ino_evs.addr, 2048)
-				if n <= 0: raise IOError.new_exception("fifo: inotify read failed")
-				for e in inotify_events(ino_evs.addr, n):
-					let name = $cast[cstring](e[].name.addr)
-					if conf.run_fifo.extract_filename != name.extract_filename: continue
-					log_debug(&"fifo: create/change event detected for [ {name} ]")
-					n = 0; break
-		defer: fifo.close()
-		log_debug("fifo: connected")
-		for ev in fifo.lines:
-			if ev.strip.len == 0: continue
-			try:
-				let ej = ev.parse_json
-				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
-			except ValueError as e:
-				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
-			with_lock fifo_buff_lock:
-				if cs.m < conf.run_fifo_buff_sz: cs.m += 1
-				let k = (cs.n + 1) %% conf.run_fifo_buff_sz; cs.buff[k] = conn; cs.n = k
-			sdl_update_set()
-
 proc main_help(err="") =
 	proc print(s: string) =
 		let dst = if err == "": stdout else: stderr
@@ -499,7 +491,7 @@ proc main(argv: seq[string]) =
 				else: main_help(&"Unrecognized argument: {opt}")
 		opt_empty_check()
 
-	main_init_logger(opt_debug)
+	log_init(opt_debug)
 	if opt_conf_file != "": conf = parse_conf_file(opt_conf_file)
 	if opt_debug and not conf.run_debug: conf.run_debug = true
 	elif conf.run_debug and not opt_debug: set_log_filter(lvl_all)
@@ -518,10 +510,8 @@ proc main(argv: seq[string]) =
 	if not (sdl.open_sdl3_library() and sdl.open_sdl3_ttf_library()):
 		raise SDLError.new_exception("Failed to open sdl3/sdl3_ttf libs")
 	defer: sdl.close_sdl3_library(); sdl.close_sdl3_ttf_library()
-	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS)
-	defer: sdl.Quit()
-	sdl.XTTFInit()
-	defer: sdl.XTTFQuit()
+	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS); defer: sdl.Quit()
+	sdl.XTTFInit(); defer: sdl.XTTFQuit()
 	sdl.SetAppMetadata(conf.win_title, conf.app_version, conf.app_id)
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
@@ -535,20 +525,14 @@ proc main(argv: seq[string]) =
 		"Potential issue - window pixel format is expected to always" &
 			&" be XRGB8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
-	fifo_buff = alloc_shared0(
-		sizeof(ConnInfoBuffer) + sizeof(ConnInfo) * conf.run_fifo_buff_sz )
-	fifo_buff_lock.init_lock()
-	defer: fifo_buff_lock.release()
+	conn_buff = cast[ConnInfoBuffer](alloc_shared0(
+		sizeof(ConnInfoBuffer) + sizeof(ConnInfo) * conf.run_fifo_buff_sz ))
+	conn_buff_lock.init_lock(); defer: conn_buff_lock.release()
 	var fifo_reader: Thread[Conf]
-	fifo_reader.create_thread(main_fifo_reader, conf)
+	fifo_reader.create_thread(conn_reader, conf)
 
-	var conns = NetConns(conf: conf)
-	conns.init()
-	defer: conns.close()
-	var paint = Painter( conf: conf, win: win, rdr: win_rdr,
-		conn_list: (proc (rows: int): seq[ConnInfo] = return conns.list(rows)) )
-	paint.init()
-	defer: paint.close()
+	var paint = Painter(conf: conf, win: win, rdr: win_rdr, conn_list: conn_list)
+	paint.init(); defer: paint.close()
 
 	var
 		running = true
