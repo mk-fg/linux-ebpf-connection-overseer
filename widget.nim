@@ -536,22 +536,27 @@ proc main(argv: seq[string]) =
 
 	var
 		running = true
+		ev_upd = false
 		ev: sdl.Event
 		ts_render: int64
+	template ev_proc =
+		case ev.typ
+		of sdl.EventType.EVENT_QUIT: running = false; ev_upd = true; break
+		of sdl.EventType.EVENT_USER: ev_upd = true
+		of sdl.EventType.EVENT_WINDOW_MOUSE_ENTER: discard
+		of sdl.EventType.EVENT_WINDOW_MOUSE_LEAVE: discard
+		elif ( ev.typ >= sdl.EventType.EVENT_DISPLAY_RMIN and
+					ev.typ <= sdl.EventType.EVENT_DISPLAY_RMAX ) or
+				( ev.typ >= sdl.EventType.EVENT_WINDOW_RMIN and
+					ev.typ <= sdl.EventType.EVENT_WINDOW_RMAX ):
+			ev_upd = true; sdl_update_set() # redraw for display/win changes
+		else: discard # key/mouse events, etc
 	sdl_update_set()
 	while running and fifo_reader.running:
-		while running and (sdl.PollEvent(ev) or sdl.WaitEvent(ev)):
-			case ev.typ
-			of sdl.EventType.EVENT_QUIT: running = false; break
-			of sdl.EventType.EVENT_USER: break
-			of sdl.EventType.EVENT_WINDOW_MOUSE_ENTER: discard
-			of sdl.EventType.EVENT_WINDOW_MOUSE_LEAVE: discard
-			elif ( ev.typ >= sdl.EventType.EVENT_DISPLAY_RMIN and
-						ev.typ <= sdl.EventType.EVENT_DISPLAY_RMAX ) or
-					( ev.typ >= sdl.EventType.EVENT_WINDOW_RMIN and
-						ev.typ <= sdl.EventType.EVENT_WINDOW_RMAX ):
-				sdl_update_set(); break
-			else: discard # key/mouse events, etc
+		while sdl.WaitEvent(ev): # blocks when redraw isn't needed
+			ev_upd = false; ev_proc
+			while sdl.PollEvent(ev): ev_proc
+			if ev_upd: break
 		if paint.draw(): sdl_update_set()
 
 		if not sdl_update_check(ts_render): continue
