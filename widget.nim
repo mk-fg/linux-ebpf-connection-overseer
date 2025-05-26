@@ -382,6 +382,7 @@ method draw(o: var Painter): bool =
 
 {.pop.}
 
+
 proc main_init_logger(debug: bool) =
 	var logger = new_console_logger(
 		fmt_str="$levelid $datetime :: ", use_stderr=true,
@@ -401,6 +402,8 @@ proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
 		conn: ConnInfo
 	while true:
 		block fifo_inotify_open:
+			try: fifo = open(conf.run_fifo, fm_read); break fifo_inotify_open
+			except IOError as e: log_debug(&"fifo: [ {e.msg} ] - will wait for it")
 			var ino_fd = inotify_init()
 			defer:
 				if close(ino_fd.cint) != 0:
@@ -412,7 +415,7 @@ proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
 			while true:
 				if n == 0:
 					try: fifo = open(conf.run_fifo, fm_read); break
-					except IOError as e: log_debug(&"fifo: [ {e.msg} ] - will wait for it")
+					except IOError as e: log_debug(&"fifo: [ {e.msg} ] - waiting for it")
 				n = read(ino_fd, ino_evs.addr, 2048)
 				if n <= 0: raise IOError.new_exception("fifo: inotify read failed")
 				for e in inotify_events(ino_evs.addr, n):
@@ -421,6 +424,7 @@ proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
 					log_debug(&"fifo: create/change event detected for [ {name} ]")
 					n = 0; break
 		defer: fifo.close()
+		log_debug("fifo: connected")
 		for ev in fifo.lines:
 			if ev.strip.len == 0: continue
 			try:
