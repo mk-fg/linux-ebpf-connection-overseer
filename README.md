@@ -15,6 +15,7 @@ Table of Contents
 
 - [Technical details](#hdr-technical_details)
 - [Build / Requirements](#hdr-build___requirements)
+- [Known limitations and things to improve later]
 - [Links](#hdr-links)
 
 Repository URLs:
@@ -22,6 +23,9 @@ Repository URLs:
 - <https://github.com/mk-fg/linux-ebpf-connection-overseer>
 - <https://codeberg.org/mk-fg/linux-ebpf-connection-overseer>
 - <https://fraggod.net/code/git/linux-ebpf-connection-overseer>
+
+[Known limitations and things to improve later]:
+  #hdr-known_limitations_and_things_to_improve_later
 
 
 <a name=hdr-technical_details></a>
@@ -119,6 +123,27 @@ More specifically:
 [tinyspline]: https://github.com/msteinbeck/tinyspline/
 [SDL3]: https://libsdl.org/
 [SDL3_ttf]: https://github.com/libsdl-org/SDL_ttf
+
+
+<a name=hdr-known_limitations_and_things_to_improve_later></a>
+## Known limitations and things to improve later
+
+- Finish implementing all the stuff planned from the start.
+
+    - Connection traffic counters.
+    - Cgroup information for displayed network connections.
+    - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
+    - Check how firewalled conns get handled, make those visually distinctive.
+    - Nicer text with an outline.
+    - Effects for new/faded connections added back to the list (glow/blur, slide, etc).
+    - Configurable aliases for hosts/ports/etc in the output.
+    - Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
+    - Some screenshot and ascii diagram of components in this README.
+
+- Add sending of eBPF event info over network sockets (unix, tcp/udp).
+
+    Currently can be done by running socat from fifo to socket and back to fifo,
+    but should be easy enough to support in the python script and widget too.
 
 
 <a name=hdr-links></a>
