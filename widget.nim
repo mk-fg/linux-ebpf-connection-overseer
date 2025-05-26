@@ -164,7 +164,7 @@ proc parse_conf_file(conf_path: string): Conf =
 		else: log_warn(&"Failed to parse config-file line {line_n} :: {line}")
 	if conf.line_h == 0:
 		if conf_text_gap != 0: conf.line_h = conf.font_h + conf_text_gap
-		elif conf_text_hx >= 0: conf.line_h = int(float(conf.font_h) * conf_text_hx)
+		elif conf_text_hx >= 0: conf.line_h = int(conf.font_h.float * conf_text_hx)
 		else: conf.line_h = int(conf_text_hx)
 	return conf
 
@@ -451,11 +451,17 @@ proc main_help(err="") =
 			from leco-event-pipe output fifo socket, and render those
 			as fading text lines to a semi-transparent desktop window.
 		Intended to run indefinitely as a desktop network-monitoring widget.
+		Options specified on the command line override ones in the ini configuration file.
 
-		Arguments and options (in "{app} [options] <config.ini>" command):
+		Arguments and options (in "{app} [options] [config.ini]" command):
 
 			<config.ini>
 				Configuration ini-file to read. See example in the repository for all options.
+
+			-f/--fifo <path>
+				Path to an input FIFO socket, used by leco-event-pipe script for its output.
+				Can be initially missing/inaccessible, tool will wait for it.
+				Must be specified either in configuration file, or with this option.
 
 			-d/--debug - enable verbose logging to stderr, incl. during config file loading.
 		""")
@@ -463,7 +469,9 @@ proc main_help(err="") =
 
 proc main(argv: seq[string]) =
 	var
+		conf = Conf()
 		opt_conf_file = ""
+		opt_fifo_path = ""
 		opt_debug = false
 
 	block cli_parser:
@@ -474,9 +482,8 @@ proc main(argv: seq[string]) =
 			if opt_last == "": return
 			main_help &"{opt_fmt(opt_last)} option unrecognized or requires a value"
 		proc opt_set(k: string, v: string) =
-			# if k in ["x", "some-delay"]: opt_some_delay = parse_float(v)
-			main_help &"Unrecognized option [ {opt_fmt(k)} = {v} ]"
-
+			if k in ["f", "fifo"]: opt_fifo_path = v
+			else: main_help &"Unrecognized option [ {opt_fmt(k)} = {v} ]"
 		for t, opt, val in getopt(argv):
 			case t
 			of cmd_end: break
@@ -491,13 +498,13 @@ proc main(argv: seq[string]) =
 				else: main_help(&"Unrecognized argument: {opt}")
 		opt_empty_check()
 
-		if opt_conf_file == "":
-			main_help "Missing required configuration file argument"
-
 	main_init_logger(opt_debug)
-	var conf = parse_conf_file(opt_conf_file)
+	if opt_conf_file != "": conf = parse_conf_file(opt_conf_file)
 	if opt_debug and not conf.run_debug: conf.run_debug = true
 	elif conf.run_debug and not opt_debug: set_log_filter(lvl_all)
+	if opt_fifo_path != "": conf.run_fifo = opt_fifo_path
+	if conf.run_fifo == "": main_help "Input FIFO path must be set via config/option"
+	if conf.line_h == 0: conf.line_h = int(conf.font_h.float * 1.5)
 
 	if conf.font_file == "":
 		let fc_lookup = "sans:lang=en"
@@ -527,7 +534,7 @@ proc main(argv: seq[string]) =
 		"Potential issue - window pixel format is expected to always" &
 			&" be XRGB8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
-	conf.run_fifo_buff = alloc_shared(
+	conf.run_fifo_buff = alloc_shared0(
 		sizeof(ConnInfoBuffer) + sizeof(ConnInfo) * conf.run_fifo_buff_sz )
 	conf.run_fifo_buff_lock.init_lock()
 	defer: conf.run_fifo_buff_lock.release()
