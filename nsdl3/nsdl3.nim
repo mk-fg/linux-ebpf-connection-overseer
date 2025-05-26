@@ -106,20 +106,24 @@ proc GetError*(): string {.inline.} =
 # SDL_bool SDL_HasEvent(Uint32 type)
 # SDL_bool SDL_HasEvents(Uint32 minType, Uint32 maxType)
 
-proc PeepEvents*(events: var openArray[Event], numevents: int,
-                 action: EventAction, min_type: EventType,
-                 max_type: EventType): int =
+proc PeepEvents*(events: var openArray[Event], num_events: int,
+    action: EventAction, min_type: EventType, max_type: EventType): int =
   ##  ```c
   ##  int SDL_PeepEvents(SDL_Event *events, int numevents,
   ##                     SDL_eventaction action, Uint32 minType,
   ##                     Uint32 maxType)
   ##  ```
-  let num_events = cint min(numevents, events.len)
-  chk_err_if result < 0: SDL_PeepEvents events[0].addr, num_events, action, min_type, max_type
+  let n = cint min(num_events, events.len)
+  {.cast(gcsafe).}:
+    chk_err_if result < 0: SDL_PeepEvents events[0].addr, n, action, min_type, max_type
 
-proc PeepEvents*(events: var openArray[Event], action: EventAction,
-                 min_type: EventType, max_type: EventType): int {.inline.} =
-  PeepEvents events, action, min_type, max_type
+proc PeepEvents*(events: var openArray[Event],
+    action: EventAction, min_type: EventType, max_type: EventType): int {.inline.} =
+  PeepEvents events, events.len, action, min_type, max_type
+
+proc PeepEvents*(min_type: EventType, max_type: EventType): int =
+  {.cast(gcsafe).}:
+    chk_err_if result < 0: SDL_PeepEvents nil, 0, PEEKEVENT, min_type, max_type
 
 proc PollEvent*(): bool {.inline.} =
   ##  ```c
@@ -143,7 +147,7 @@ proc PushEvent*(event: var Event): bool {.inline.} =
   ##  ```c
   ##  int SDL_PushEvent(SDL_Event *event)
   ##  ```
-  {.cast(gcsafe).}: SDL_PushEvent(event.addr)
+  {.cast(gcsafe).}: SDL_PushEvent event.addr
 
 # Uint32 SDL_RegisterEvents(int numevents)
 
@@ -1703,8 +1707,7 @@ proc QuitRequested*(): bool {.inline.} =
   ##                      SDL_EVENT_QUIT) > 0))
   ##  ```
   PumpEvents()
-  var events: seq[Event] = @[]
-  PeepEvents(events, 0, PEEKEVENT, EVENT_QUIT, EVENT_QUIT) > 0
+  PeepEvents(EVENT_QUIT, EVENT_QUIT) > 0
 
 # ------------------------------------------------------------------------- #
 # <SDL3/SDL_ttf.h>                                                          #

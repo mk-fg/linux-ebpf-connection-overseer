@@ -71,8 +71,9 @@ var
 proc sdl_update_set(ts: int64 = -1) {.inline.} =
 	## Set timestamp for sdl_update_check, wake up sdl.WaitEvent().
 	with_lock sdl_upd_lock: sdl_upd_ns = if ts < 0: get_mono_time().ticks else: ts
-	var ev = sdl.Event(typ: sdl.EventType.EVENT_USER)
-	discard sdl.PushEvent(ev)
+	let ev_user = sdl.EventType.EVENT_USER
+	if sdl.PeepEvents(ev_user, ev_user) == 0:
+		var ev = sdl.Event(typ: ev_user); discard sdl.PushEvent(ev)
 proc sdl_update_check(ts: int64 = -1): bool {.inline.} =
 	## Check for whether window update/render is needed since ts.
 	let ts = if ts < 0: get_mono_time().ticks else: ts
@@ -555,7 +556,7 @@ proc main(argv: seq[string]) =
 		ts_render: int64
 	sdl_update_set()
 	while running and fifo_reader.running:
-		while running and sdl.WaitEvent(ev):
+		while running and (sdl.PollEvent(ev) or sdl.WaitEvent(ev)):
 			case ev.typ
 			of sdl.EventType.EVENT_QUIT: running = false; break
 			of sdl.EventType.EVENT_USER: break
