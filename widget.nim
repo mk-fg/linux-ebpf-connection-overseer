@@ -5,12 +5,12 @@
 # Usage info: ./leco-sdl-widget -h
 
 import std/[ strutils, strformat, parseopt, math,
-	os, osproc, logging, re, tables, monotimes, base64 ]
+	os, osproc, logging, re, tables, heapqueue, monotimes, base64 ]
 import std/[ typedthreads, locks, posix, inotify, json ]
 import nsdl3 as sdl
 
 
-type Conf = object
+type Conf = ref object
 	win_title = "LECO Network-Monitor Widget"
 	win_ox = 20
 	win_oy = 40
@@ -56,19 +56,22 @@ proc ts_bspline_sample( spline: ptr tsBSpline, num: csize_t,
 proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
 
 
-var log_lock: Lock
+var
+	log_lock: Lock
+	log_level {.threadvar.}: Level
 proc log_init(debug: bool) =
+	let lvl = if debug: lvl_debug else: lvl_info
+	if log_level != lvl_all: log_level = lvl; return
 	var logger = new_console_logger(
 		fmt_str="$levelid $datetime :: ", use_stderr=true,
 		level_threshold=lvl_all, flush_threshold=lvl_warn )
-	add_handler(logger)
-	set_log_filter(if debug: lvl_all else: lvl_info)
-template log_debug(args: varargs[string, `$`]) =
-	with_lock log_lock: log(lvl_debug, args)
-template log_warn(args: varargs[string, `$`]) =
-	with_lock log_lock: log(lvl_warn, args)
-template log_error(args: varargs[string, `$`]) =
-	with_lock log_lock: log(lvl_error, args)
+	add_handler(logger); set_log_filter(log_level); log_level = lvl
+template log_msg(lvl: Level, args: varargs[string, `$`]) =
+	if log_level <= lvl:
+		with_lock log_lock: log(lvl, args)
+template log_debug(args: varargs[string, `$`]) = log_msg(lvl_debug, args)
+template log_warn(args: varargs[string, `$`]) = log_msg(lvl_warn, args)
+template log_error(args: varargs[string, `$`]) = log_msg(lvl_error, args)
 
 
 var
@@ -238,6 +241,7 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
+			log_debug(&"fifo: {conn}")
 			with_lock conn_buff_lock:
 				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
 				let k = (conn_buff.n + 1) %% conf.run_fifo_buff_sz
@@ -250,7 +254,7 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 type
 	Painter = object
 		conf: Conf
-		conn_list: proc (limit: int): seq[tuple[ns: CNS, line: string]]
+		conn_list: proc (limit: int): seq[ConnInfo]
 		win: Window
 		rdr: Renderer
 		tex: Texture
@@ -262,7 +266,7 @@ type
 		rows: Table[CNS, PaintedRow]
 		fade_out: seq[(int64, byte)] # (td[0..fade_ns], alpha) changes
 		closed = false
-	PaintedRow = object
+	PaintedRow = ref object
 		n: int
 		ns: CNS
 		ts_update: int64
@@ -271,7 +275,12 @@ type
 		line: string
 		fade_out_n = 0
 		replaced = true
-		updated = true
+
+proc `<`(a, b: PaintedRow): bool =
+	if a.replaced and not b.replaced: false
+	elif b.replaced and not a.replaced: true
+	elif a.ts_update != b.ts_update: a.ts_update < b.ts_update
+	else: a.ns < b.ns
 
 method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
 	let
@@ -335,6 +344,7 @@ method check_texture(o: var Painter): bool =
 	w -= 2*o.conf.win_px; h -= 2*o.conf.win_px;
 	o.tex = o.rdr.CreateTexture(
 		sdl.PIXELFORMAT_ARGB8888, sdl.TEXTUREACCESS_TARGET, w, h )
+	o.rdr.SetRenderTarget(o.tex); o.rdr.RenderClear()
 	o.tex.SetTextureBlendMode(sdl.BLENDMODE_BLEND)
 	o.tw = w; o.th = h
 	o.oy = o.conf.line_h - o.conf.font_h
@@ -353,26 +363,31 @@ method row_uid(o: Painter, ns: CNS): (string, Color) =
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)
 
-method row_get(o: var Painter, ns: CNS, line: string, ts_loop: int64 = 0): PaintedRow =
-	## Returns either matching PaintedRow or a new one,
-	##   replacing oldest row in a table if if's at full capacity.
-	var ts = ts_loop
-	if ts == 0: ts = get_mono_time().ticks
-	if o.rows.contains(ns): # update existing row
-		result = o.rows[ns]; result.replaced = false
-		if result.line == line: result.updated = false
-		else: result.line = line; result.ts_update = ts; result.updated = true
-		return
-	if o.rows.len < o.rows_draw:
-		result = PaintedRow(n: o.rows.len) # new row
-	else: # replace row
-		var ns0 = ts
-		for r in o.rows.values:
-			if r.ts_update <= ns0: ns0 = r.ts_update; result = r
-		o.rows.del(result.ns)
-	result.ns = ns; result.ts_update = ts; result.line = line
-	(result.uid, result.uid_color) = o.row_uid(ns)
-	o.rows[ns] = result
+method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
+	## Returns updated/replaced rows that need to be repainted.
+	## For new conns, replaces oldest rows without a matching conn first.
+	var
+		conns_new: seq[ConnInfo]
+		r: PaintedRow
+	for r in o.rows.mvalues: r.replaced = false
+	for conn in o.conn_list(o.rows_draw):
+		if o.rows.contains(conn.ns):
+			r = o.rows[conn.ns]; r.replaced = true # heap-sorts these last for replacement
+			if r.line != conn.line: r.line = conn.line; r.ts_update = ts; result.add(r)
+			continue
+		conns_new.add(conn)
+	if conns_new.len == 0: return result
+	var rows_replace = initHeapQueue[PaintedRow]()
+	for r in o.rows.mvalues: rows_replace.push(r)
+	for conn in conns_new:
+		if o.rows.len < o.rows_draw: # new row
+			r = PaintedRow(n: o.rows.len)
+		elif rows_replace.len != 0: # replace row
+			r = rows_replace.pop; o.rows.del(r.ns); r.replaced = true
+		else: log_debug(&"draw: no slot for new conn {conn}"); continue
+		r.ns = conn.ns; r.line = conn.line; r.ts_update = ts
+		(r.uid, r.uid_color) = o.row_uid(conn.ns)
+		o.rows[conn.ns] = r; result.add(r)
 
 method draw(o: var Painter): bool =
 	## Clear/update window contents buffer, returns true if there are any changes.
@@ -383,9 +398,9 @@ method draw(o: var Painter): bool =
 		new_texture = o.check_texture()
 
 	# Update any new/changed rows on the texture
-	for conn in o.conn_list(o.rows_draw):
-		let row = o.row_get(conn.ns, conn.line, ts)
-		if not row.updated: continue
+	var updates = o.row_updates(ts)
+	for row in updates.mitems:
+		row.fade_out_n = 0
 		var y = row.n * o.conf.line_h
 		o.rdr.SetRenderTarget(o.tex)
 		if not new_texture: # no need to cleanup if it's fresh
@@ -402,6 +417,9 @@ method draw(o: var Painter): bool =
 		o.txt.SetTextString(row.line)
 		o.txt.DrawRendererText(o.uid_w, y)
 		result = true
+		log_debug( "Row " &
+			(if row.replaced: "replace" else: "update") &
+			&": #{row.n} :: {row.uid} {row.line}" )
 
 	# Prepare main output buffer
 	o.rdr.SetRenderTarget()
@@ -494,7 +512,7 @@ proc main(argv: seq[string]) =
 	log_init(opt_debug)
 	if opt_conf_file != "": conf = parse_conf_file(opt_conf_file)
 	if opt_debug and not conf.run_debug: conf.run_debug = true
-	elif conf.run_debug and not opt_debug: set_log_filter(lvl_all)
+	elif conf.run_debug and not opt_debug: log_init(conf.run_debug)
 	if opt_fifo_path != "": conf.run_fifo = opt_fifo_path
 	if conf.run_fifo == "": main_help "Input FIFO path must be set via config/option"
 	if conf.line_h == 0: conf.line_h = int(conf.font_h.float * 1.5)
@@ -513,6 +531,7 @@ proc main(argv: seq[string]) =
 	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS); defer: sdl.Quit()
 	sdl.XTTFInit(); defer: sdl.XTTFQuit()
 	sdl.SetAppMetadata(conf.win_title, conf.app_version, conf.app_id)
+	sdl.EnableScreenSaver() # gets disabled by default
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
 		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or sdl.WINDOW_RESIZABLE or
