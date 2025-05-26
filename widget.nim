@@ -29,9 +29,7 @@ type Conf = object
 	color_bg = Color(r:0, g:12, b:0, a:40)
 	color_fg = Color(r:0xe4, g:0xe4, b:0xe4, a:0xff)
 	run_fifo = ""
-	run_fifo_buff: pointer
 	run_fifo_buff_sz = 200
-	run_fifo_buff_lock: Lock
 	run_debug = false
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
@@ -183,8 +181,12 @@ type
 		conf: Conf
 		conns: ptr ConnInfoBuffer
 
+var # ConnInfoBuffer shared with fifo-reader thread
+	fifo_buff: pointer
+	fifo_buff_lock: Lock
+
 method init(o: var NetConns) =
-	o.conns = cast[ptr ConnInfoBuffer](o.conf.run_fifo_buff)
+	o.conns = cast[ptr ConnInfoBuffer](fifo_buff)
 
 method close(o: var NetConns) = discard
 
@@ -195,7 +197,7 @@ method list(o: var NetConns, limit: int): seq[ConnInfo] =
 		if result.len >= limit: break
 		let ev = o.conns.buff[n]
 		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
-	with_lock o.conf.run_fifo_buff_lock:
+	with_lock fifo_buff_lock:
 		for n in countdown(o.conns.n, 0): append
 		for n in countdown(o.conns.m-1, o.conns.n+1): append
 
@@ -396,9 +398,7 @@ proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
 		fifo: File
 		fifo_dir = conf.run_fifo.parent_dir
 		n = 0
-		cs = cast[ptr ConnInfoBuffer](conf.run_fifo_buff)
-		cs_sz = conf.run_fifo_buff_sz
-		cs_lock = conf.run_fifo_buff_lock
+		cs = cast[ptr ConnInfoBuffer](fifo_buff)
 		conn: ConnInfo
 	while true:
 		block fifo_inotify_open:
@@ -432,9 +432,9 @@ proc main_fifo_reader(conf: Conf) {.thread, gcsafe.} =
 				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
-			with_lock cs_lock:
-				if cs.m < cs_sz: cs.m += 1
-				cs.n = (cs.n + 1) %% cs_sz; cs.buff[cs.n] = conn
+			with_lock fifo_buff_lock:
+				if cs.m < conf.run_fifo_buff_sz: cs.m += 1
+				let k = (cs.n + 1) %% conf.run_fifo_buff_sz; cs.buff[k] = conn; cs.n = k
 			sdl_update_set()
 
 proc main_help(err="") =
@@ -534,10 +534,10 @@ proc main(argv: seq[string]) =
 		"Potential issue - window pixel format is expected to always" &
 			&" be XRGB8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
-	conf.run_fifo_buff = alloc_shared0(
+	fifo_buff = alloc_shared0(
 		sizeof(ConnInfoBuffer) + sizeof(ConnInfo) * conf.run_fifo_buff_sz )
-	conf.run_fifo_buff_lock.init_lock()
-	defer: conf.run_fifo_buff_lock.release()
+	fifo_buff_lock.init_lock()
+	defer: fifo_buff_lock.release()
 	var fifo_reader: Thread[Conf]
 	fifo_reader.create_thread(main_fifo_reader, conf)
 
