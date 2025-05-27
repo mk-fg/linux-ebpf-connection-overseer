@@ -33,6 +33,7 @@ type Conf = ref object
 	run_debug = false
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
+	# XXX: configurable filtering section
 
 
 {.passl: "-lm"}
@@ -256,12 +257,12 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 		log_debug("fifo: connected")
 		for ev in fifo.lines:
 			if ev.strip.len == 0: continue
+			log_debug(&"fifo: {ev}")
 			try:
 				let ej = ev.parse_json
 				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
-			log_debug(&"fifo: {conn}")
 			with_lock conn_buff_lock:
 				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
 				let k = (conn_buff.n + 1) %% conf.run_fifo_buff_sz

@@ -4,8 +4,10 @@
 #  https://docs.ebpf.io/ebpf-library/libbpf/userspace/
 #  https://libbpf.readthedocs.io/en/latest/api.html
 
-import ctypes as ct, socket as so, collections as cs, ipaddress as ip, pathlib as pl
-import os, sys, re, struct, errno, time, json, pwd, signal, select, random
+import collections as cs, ipaddress as ip, pathlib as pl
+import ctypes as ct, socket as so, functools as ft
+import os, sys, re, struct, errno
+import time, json, pwd, signal, select, random
 
 
 class adict(dict):
@@ -95,7 +97,7 @@ class BPFMap:
 
 	_libbpf = None # needed for ringbuf_process_ring asm to process data
 	@classmethod
-	def global_init(cls): # caches are shared between map subclasses
+	def libbpf_init(cls):
 		if BPFMap._libbpf: return
 		lib = BPFMap._libbpf = ct.CDLL('libbpf.so.1', use_errno=True)
 		ptr, cint, cuint, cvoid = ct.POINTER, ct.c_int, ct.c_uint, ct.c_void_p
@@ -105,7 +107,6 @@ class BPFMap:
 		lib.bpf_map_get_info_by_fd.argtypes = cint, ptr(cls._map_info), ptr(cuint)
 		lib.bpf_map_lookup_batch.argtypes = ( cint,
 			cvoid, cvoid, cvoid, cvoid, ptr(cuint), ptr(cls._map_batch_opts) )
-		BPFMap._user_cache = TimedCacheDict(5*60)
 
 	fd = fd_close = None
 	def map_fd(self, fd=None, path=None):
@@ -133,19 +134,7 @@ class BPFMap:
 		e.comm = e.comm.rstrip(b'\0').decode()
 		e.rx, e.tx = (pick( (0.3, 30, 950), (0.4, 1e3, 700e3), # XXX: fake data
 			(0.4, 500e3, 900e6), (0.2, 500e3, 100e9), (1.0, 100, 800e3) ) for n in range(2))
-
-		ev = adict(ns=e.ns)
-		if not (u := self._user_cache.get(e.uid)):
-			try: u = pwd.getpwuid(e.uid).pw_name
-			except KeyError: u = str(e.uid)
-			self._user_cache[e.uid] = u
-		# XXX: aliases for ports, resolve addrs to hosts/asns
-		ev.line = ' :: '.join([ # XXX: "comm [cgroup]" instead of just comm
-			time.strftime('%H:%M', time.localtime(e.ns / 1e9)),
-			u, re.sub(r'::+', ':', e.comm),
-			f'{e.daddr} {e.dport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
-			f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' ])
-		return ev
+		return e
 
 class BPFMapRingTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
@@ -153,7 +142,7 @@ class BPFMapRingTable(BPFMap):
 	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway.
 
 	def __init__(self, fd=None, path=None):
-		self.global_init()
+		self.libbpf_init()
 		self.fd, info_fn = self.map_fd(fd, path), self._libbpf.bpf_map_get_info_by_fd
 		info, n = self._map_info(), ct.c_uint(n0 := ct.sizeof(self._map_info))
 		if info_fn(self.fd, ct.byref(info), ct.byref(n)) or n.value < n0 or info.key != 4:
@@ -184,7 +173,7 @@ class BPFMapRingTable(BPFMap):
 class BPFMapRingBuffer(BPFMap):
 
 	def __init__(self, fd=None, path=None):
-		self.global_init()
+		self.libbpf_init()
 		self.updates, self.handler = list(), self._rb_handler_t(self._ev_handler)
 		self.rb = self._libbpf.ring_buffer__new(self.map_fd(fd, path), self.handler, None, None)
 		if not self.rb: raise BPFError(f'libbpf ring_buffer__new failed [fd={fd} path={path}]')
@@ -204,9 +193,31 @@ class BPFMapRingBuffer(BPFMap):
 		return tuple(self.updates)
 
 
-def stream_events(table, rb, dst, replay_limit=None):
+def ev_conv(e, cache=None, all_data=False):
+	# XXX: better keys than "ns", e.g. src/dst addr/port, like in routing
+	# XXX: add aliases, resolve addrs to hosts/asns
+	ev = adict(ns=e.ns)
+	if not (cache and (u := cache.get(e.uid))):
+		try: u = pwd.getpwuid(e.uid).pw_name
+		except KeyError: u = str(e.uid)
+		if cache is not None: cache[e.uid] = u
+	ev.line = ' :: '.join([ # XXX: "comm [cgroup]" instead of just comm
+		time.strftime('%H:%M', time.localtime(e.ns / 1e9)),
+		u, re.sub(r'::+', ':', e.comm),
+		f'{e.daddr} {e.dport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
+		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' ])
+	if all_data: ev = dict(e, **ev)
+	return ev
+
+def json_conv(v):
+	if ip_repr := getattr(v, 'compressed', None): return ip_repr
+	raise TypeError(f'Non-JSON type [{v.__class__.__name__}] {v}')
+
+def stream_events(table, rb, dst, ev_proc, replay_limit=None):
 	def _dst_write(ev, ns):
-		try: dst.write(json.dumps(ev)); dst.write('\n'); dst.flush()
+		try:
+			dst.write(json.dumps(ev, default=json_conv))
+			dst.write('\n'); dst.flush()
 		except BrokenPipeError: # pipe closed
 			if dst is sys.stdout: os.dup2(os.open(
 				os.devnull, os.O_WRONLY ), dst.fileno())
@@ -216,7 +227,7 @@ def stream_events(table, rb, dst, replay_limit=None):
 		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
 		for ev in sorted(table.read(), key=lambda ev: ev.ns):
 			if (ns_table := ev.ns) < ns_cutoff: continue
-			if _dst_write(ev, ns): return
+			if _dst_write(ev_proc(ev), ns): return
 		poll.register(dst_fd := dst.fileno(), 0)
 		poll.register(rb.fd, select.EPOLLIN)
 		while True:
@@ -224,7 +235,7 @@ def stream_events(table, rb, dst, replay_limit=None):
 			if ev_fds[0][0] == dst_fd: break # dst pipe closed
 			for ev in rb.wait(0.1): # shouldn't actually need to wait
 				if ev.ns <= ns_table or ev.ns < ns_cutoff: continue
-				if _dst_write(ev, time.monotonic_ns()): return
+				if _dst_write(ev_proc(ev), time.monotonic_ns()): return
 			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
 
 def main(argv=None):
@@ -250,6 +261,8 @@ def main(argv=None):
 		Typically under /sys/fs/bpf/ mountpoint. Might require privileged access.'''))
 	parser.add_argument('-r', '--replay-window', type=float, metavar='seconds',
 		help='Ignore pre-buffered events older than specified number of seconds.')
+	parser.add_argument('--extra-ev-data', action='store_true',
+		help='Pass through all extra event info for debugging, not just the necessary stuff.')
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
 	if not opts.pin:
@@ -274,11 +287,15 @@ def main(argv=None):
 		bpf_rb = BPFMapRingBuffer(path=p_maps / 'updates')
 		bpf_table = BPFMapRingTable(path=p_maps / 'conn_table')
 
+	stream_kws = dict( table=bpf_table, rb=bpf_rb,
+		replay_limit=opts.replay_window, ev_proc=ft.partial(
+			ev_conv, cache=TimedCacheDict(5*60), all_data=opts.extra_ev_data ) )
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_table as table:
-		if not opts.fifo: return stream_events(table, rb, sys.stdout, opts.replay_window)
+		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
+		# XXX: support sending to multiple receivers
 		while dst := openat2(opts.fifo, 'w'):
-			try: stream_events(table, rb, dst, opts.replay_window)
+			try: stream_events(dst=dst, **stream_kws)
 			finally:
 				try: dst.close()
 				except BrokenPipeError: pass

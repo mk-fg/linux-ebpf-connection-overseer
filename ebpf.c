@@ -1,5 +1,6 @@
 // Docs: https://docs.ebpf.io/
 
+// XXX: change src/dst addrs to local/remote, add in/out flag
 // XXX: test incoming conns and wg tunnels
 // XXX: add traffic counters for conns, events on those getting updates
 // XXX: test how connect-returns work with firewalled conns

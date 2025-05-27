@@ -138,6 +138,11 @@ More specifically:
     - Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
     - Some screenshot and ascii diagram of components in this README.
 
+- Send events from pipe to multiple receivers.
+
+    Coupled with widget-side filtering, should allow to have different overlays
+    for different data, or just round-robin events between those based on key hash.
+
 - Add sending of eBPF event info over network sockets (unix, tcp/udp).
 
     Currently can be done by running socat from fifo to socket and back to fifo,
