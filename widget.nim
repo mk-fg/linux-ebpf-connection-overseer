@@ -35,10 +35,6 @@ type Conf = ref object
 	app_id = "net.fraggod.leco.widget"
 
 
-{.passl: "-lcrypto"}
-proc SHA256( data: cstring, data_len: cint,
-	md_buf: cstring ): cstring {.importc, header: "<openssl/sha.h>".}
-
 {.passl: "-lm"}
 {.passl: "build/tinyspline/lib64/libtinyspline.a"}
 type
@@ -54,6 +50,30 @@ proc ts_bspline_sample( spline: ptr tsBSpline, num: csize_t,
 	points: ptr ptr UncheckedArray[cdouble], actual_num: ptr csize_t, status: ptr tsStatus): cint
 {.pop.}
 proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
+
+
+import std/[ bitops, endians ]
+func siphash(data: string, key="leco-sdl-widget1", C=2, D=4): string =
+	## SipHash-2-4 with 64b/8B output, from/to strings.
+	assert key.len == 16
+	template key_xor(v: untyped, o: int) = (v = v xor (key[n+o].uint64 shl (n shl 3)))
+	template rounds(n: int) = (for _ in 1..n:
+		v0 = v0 + v1; v1 = rotate_left_bits(v1, 13); v1 = v1 xor v0
+		v0 = rotate_left_bits(v0, 32); v2 = v2 + v3; v3 = rotate_left_bits(v3, 16)
+		v3 = v3 xor v2; v0 = v0 + v3; v3 = rotate_left_bits(v3, 21); v3 = v3 xor v0
+		v2 = v2 + v1; v1 = rotate_left_bits(v1, 17); v1 = v1 xor v2; v2 = rotate_left_bits(v2, 32))
+	var v0, v1, v2, v3, b: uint64
+	(v0, v1, v2, v3, b) = ( 0x736f6d6570736575'u64, 0x646f72616e646f6d'u64,
+		0x6c7967656e657261'u64, 0x7465646279746573'u64, data.len.uint64 shl 56 )
+	for n in 0..7: key_xor(v0, 0); key_xor(v1, 8); key_xor(v2, 0); key_xor(v3, 8)
+	let left = data.len and 7
+	for n in countup(0, (data.len - 8) - left, 8):
+		var m: uint64
+		for nn in 0..7: m = m or (data[n+nn].uint64 shl (nn shl 3))
+		v3 = v3 xor m; rounds(C); v0 = v0 xor m
+	for n in data.len-left .. data.high: b = b or (data[n].uint64 shl ((n and 7) shl 3))
+	v3 = v3 xor b; rounds(C); v0 = v0 xor b; v2 = v2 xor 0xff; rounds(D); b = v0 xor v1 xor v2 xor v3
+	result = newString(8); littleEndian64(result.cstring, b.addr)
 
 
 var
@@ -354,11 +374,8 @@ method check_texture(o: var Painter): bool =
 	return true
 
 method row_uid(o: Painter, ns: CNS): (string, Color) =
-	var
-		ns_str = $ns
-		uid_str = newString(32)
-	discard SHA256(ns_str.cstring, ns_str.len.cint, uid_str.cstring)
 	let
+		uid_str = siphash($ns)
 		uid = o.conf.line_uid_fmt % uid_str.encode(safe=true)[0 .. o.conf.line_uid_chars]
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)

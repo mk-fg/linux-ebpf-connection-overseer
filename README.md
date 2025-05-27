@@ -111,18 +111,16 @@ More specifically:
   to fetch tinyspline build dependency library.
   Can be built separately using `make leco-sdl-widget` command.
 
+[cmake]: https://cmake.org/
 [make]: https://www.gnu.org/software/make
 [clang]: https://clang.llvm.org/
 [llvm]: https://llvm.org/
-
+[Nim]: https://nim-lang.org/
 [python]: https://www.python.org/
 [libbpf]: https://github.com/libbpf/libbpf
-
-[Nim]: https://nim-lang.org/
-[cmake]: https://cmake.org/
-[tinyspline]: https://github.com/msteinbeck/tinyspline/
 [SDL3]: https://libsdl.org/
 [SDL3_ttf]: https://github.com/libsdl-org/SDL_ttf
+[tinyspline]: https://github.com/msteinbeck/tinyspline/
 
 
 <a name=hdr-known_limitations_and_things_to_improve_later></a>
@@ -136,7 +134,7 @@ More specifically:
     - Check how firewalled conns get handled, make those visually distinctive.
     - Nicer text with an outline.
     - Effects for new/faded connections added back to the list (glow/blur, slide, etc).
-    - Configurable aliases for hosts/ports/etc in the output.
+    - Configurable aliases and filters for hosts/ports/etc in the output.
     - Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
     - Some screenshot and ascii diagram of components in this README.
 
