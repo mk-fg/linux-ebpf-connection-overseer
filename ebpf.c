@@ -1,6 +1,7 @@
 // Docs: https://docs.ebpf.io/
 
-// XXX: test incoming conns and wg tunnels, re-add kprobes for latter if missing in tracepoints
+// XXX: test incoming conns, check how to identify those
+// XXX: re-add kprobes for wireguard tunnels
 // XXX: test how tracepoints work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through
 // XXX: add cgroup id's to maps, resolve cgroup ids to names here if possible

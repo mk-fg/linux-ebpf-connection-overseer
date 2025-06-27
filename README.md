@@ -41,8 +41,9 @@ Consists of several components:
     Requires elevated privileges, intended to be run as `ExecStartPre=+...` command.\
     Without pinning, when service stops, fds get closed, which cleans up eBPFs as well.
 
-- Unprivileged [leco-event-pipe] system-daemon python script that uses eBPF map file
-  descriptors to monitor for network-related info and export it to some fifo socket as json lines.
+- Unprivileged [leco-event-pipe] system-daemon python script that uses eBPF map
+  file descriptors to monitor for network-related info, filter and export it to
+  some fifo socket as json lines.
 
     [leco.service] systemd unit file can be used to run loader binary and start this script.
 
@@ -128,6 +129,8 @@ More specifically:
 
 - Finish implementing all the stuff planned from the start.
 
+    - Rate-limit leco-event-pipe updates, in addition to rate-limit in ebpf.
+    - Parse more config-file values, like colors and such.
     - Cgroup information for displayed network connections.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.

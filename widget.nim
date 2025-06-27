@@ -263,9 +263,9 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 {.push base.}
 
 type NetConns = object
-	list_last: (int, int)
+	list_last: (int, int, int)
 
-proc list(o: var NetConns, limit: int): seq[ConnInfo] =
+proc list(o: var NetConns, limit: int, cache_cookie: int = 0): seq[ConnInfo] =
 	## Returns specified number of last-changed connections to display in a window.
 	var line: string # make sure to not ref shallow-copied strings shared with thread
 	template append =
@@ -273,15 +273,15 @@ proc list(o: var NetConns, limit: int): seq[ConnInfo] =
 		let ev = conn_buff.buff[n]
 		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
 	with_lock conn_buff_lock:
-		if o.list_last == (conn_buff.gen, limit): return result # same list+window = no changes
+		if o.list_last == (conn_buff.gen, limit, cache_cookie): return result # no changes
 		for n in countdown(conn_buff.n-1, 0): append
 		for n in countdown(conn_buff.m-1, conn_buff.n+1): append
-		o.list_last = (conn_buff.gen, limit)
+		o.list_last = (conn_buff.gen, limit, cache_cookie)
 
 type
 	Painter = object
 		conf: Conf
-		conn_list: proc (limit: int): seq[ConnInfo] # can return empty list for "no changes"
+		conn_list: proc (limit, cache_n: int): seq[ConnInfo] # empty result for "no changes"
 		win: Window
 		rdr: Renderer
 		tex: Texture
@@ -396,7 +396,7 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 	var
 		conns_new: seq[ConnInfo]
 		r: PaintedRow
-	let conn_list = o.conn_list(o.rows_draw)
+	let conn_list = o.conn_list(o.rows_draw, o.rows.len)
 	if conn_list.len == 0: return result # no conns or no changes since last call
 	for r in o.rows.mvalues: r.listed = false; r.replaced = false
 	for conn in conn_list:
@@ -583,7 +583,7 @@ proc main(argv: seq[string]) =
 	var
 		conns = NetConns()
 		paint = Painter( conf: conf, win: win, rdr: win_rdr,
-			conn_list: (proc (rows: int): seq[ConnInfo] = conns.list(rows)) )
+			conn_list: (proc (rows, cache_n: int): seq[ConnInfo] = conns.list(rows, cache_n)) )
 	paint.init(); defer: paint.close()
 
 	var
