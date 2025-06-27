@@ -73,7 +73,7 @@ void parse_opts( int argc, char *argv[],
 
 
 #define fd_version 1
-#define fd_version_check "kprobe__tcp_v4_connect__v1"
+#define fd_version_check "tp__sock_send__v1"
 
 int main(int argc, char **argv) {
 	int opt_verbose = false, opt_pin_fdstore = false; char *opt_pin = "";
@@ -159,7 +159,7 @@ int main(int argc, char **argv) {
 
 	// Clear/store only specific non-versioned maps with --pin-fdstore option
 	if (pin_mode && opt_pin_fdstore) {
-		char *pin_objs[] = {"conn_table", "updates"};
+		char *pin_objs[] = {"conn_map", "updates"};
 		for (n = 0; n < 2; n++) {
 			snprintf(pin, 1024, "%s/%s", opt_pin_maps, name = pin_objs[n]);
 			if ((fd = bpf_obj_get(pin)) <= 0) E(1, "Pinned obj_get failed [ %s ]", pin);

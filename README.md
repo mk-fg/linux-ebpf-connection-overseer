@@ -81,18 +81,18 @@ More specifically:
 - [leco-ebpf-load] loader-binary requires [make], [clang] and [llvm] tools,
   as well as kernel headers (e.g. kernel-devel package) to build it.
 
-    Running resulting eBPF-binary on a system needs linux 6.x+,
-    with following config opts enabled:
+    Running resulting eBPF-binary on a system needs linux 6.3+,
+    with following config options enabled:
 
     ``` console
-    % bsdcat /proc/config.* | grep -E 'BPF|KPROBE'
-    ## Alternatively: grep -E 'BPF|KPROBE' /boot/config-$(uname -r)
+    % bsdcat /proc/config.* | grep -E 'CONFIG_(BPF|TRACEPOINTS)='
+    ## Alternatively: grep -E 'CONFIG_(BPF|TRACEPOINTS)=' /boot/config-$(uname -r)
+    ## Or also: cat /sys/kernel/debug/tracing/events/sock/sock_send_length/format
     CONFIG_BPF=y
-    CONFIG_BPF_SYSCALL=y
-    CONFIG_BPF_EVENTS=y
-    CONFIG_KPROBES=y
-    CONFIG_KPROBE_EVENTS=y
+    CONFIG_TRACEPOINTS=y
     ```
+
+    (which can be enabled via `BPF_SYSCALL` + `FTRACE` + `KPROBE_EVENTS`)
 
     Run `git submodule init && git submodule update` first to fetch
     libbpf/bpftool build-dependencies. `make leco-ebpf-load` command
@@ -128,7 +128,6 @@ More specifically:
 
 - Finish implementing all the stuff planned from the start.
 
-    - Connection traffic counters.
     - Cgroup information for displayed network connections.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.
