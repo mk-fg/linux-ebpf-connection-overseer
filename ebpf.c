@@ -28,7 +28,7 @@
 // To check global counters: bpftool map dump pinned /sys/fs/bpf/leco/maps/ebpf_bss
 __u64 conn_proc_errs = 0;
 
-#define CONN_TRX_UPD_NS NS(30,000,000,000) // rate-limit for trx-counter update events
+#define CONN_TRX_UPD_NS NS(3,000,000,000) // rate-limit for trx-counter update events
 
 enum conn_type { CT_TCP4 = 1, CT_TCP6, CT_UDP4, CT_UDP6, CT_X4, CT_X6 };
 

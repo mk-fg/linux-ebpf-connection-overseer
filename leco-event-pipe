@@ -216,7 +216,7 @@ def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
 	with select.epoll(sizehint=2) as poll:
 		ns_cache, ns_cutoff, ns = 0, 0, time.monotonic_ns()
 		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
-		for ev in sorted(cache.read(), key=lambda ev: ev.ns):
+		for ev in sorted(cache.read(), key=lambda ev: ev.trx_ns):
 			if (ns_cache := ev.trx_ns) < ns_cutoff: continue
 			if _dst_write(ev_proc(ev), ns): return
 		if not rb: return # one-off cache dump

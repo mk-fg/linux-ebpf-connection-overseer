@@ -162,7 +162,7 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "init-offset-left": conf.win_ox = val.parse_int
 				of "init-offset-top": conf.win_oy = val.parse_int
 				of "init-width": conf.win_w = val.parse_int
-				of "init-height": conf.win_w = val.parse_int
+				of "init-height": conf.win_h = val.parse_int
 				of "pad-x": conf.win_px = val.parse_int
 				of "pad-y": conf.win_py = val.parse_int
 				of "frames-per-second-max":
@@ -204,23 +204,12 @@ type
 		ns: CNS
 		line: string
 	ConnInfoBuffer = ptr object
-		n, m: int # list = [n, m) + [0, n)
+		n, m, gen: int # list = [n, m) + [0, n)
 		buff: UncheckedArray[ConnInfo]
 
-var # shared with fifo-conn-reader thread
+var # updated from fifo-conn-reader thread to use by NetConns
 	conn_buff: ConnInfoBuffer
 	conn_buff_lock: Lock
-
-proc conn_list(limit: int): seq[ConnInfo] =
-	## Returns specified number of last-changed connections to display in a window.
-	var line: string # make sure to not ref shallow-copied strings shared with thread
-	template append =
-		if result.len >= limit: break
-		let ev = conn_buff.buff[n]
-		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
-	with_lock conn_buff_lock:
-		for n in countdown(conn_buff.n, 0): append
-		for n in countdown(conn_buff.m-1, conn_buff.n+1): append
 
 proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 	## Daemon thread that populates conn_buff.
@@ -264,18 +253,35 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
 			with_lock conn_buff_lock:
+				conn_buff.buff[conn_buff.n] = conn
 				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
-				let k = (conn_buff.n + 1) %% conf.run_fifo_buff_sz
-				conn_buff.buff[k] = conn; conn_buff.n = k
+				conn_buff.n = (conn_buff.n + 1) %% conf.run_fifo_buff_sz
+				conn_buff.gen = (conn_buff.gen + 1) %% 1_073_741_824
 			sdl_update_set()
 
 
 {.push base.}
 
+type NetConns = object
+	list_last: (int, int)
+
+proc list(o: var NetConns, limit: int): seq[ConnInfo] =
+	## Returns specified number of last-changed connections to display in a window.
+	var line: string # make sure to not ref shallow-copied strings shared with thread
+	template append =
+		if result.len >= limit: break
+		let ev = conn_buff.buff[n]
+		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
+	with_lock conn_buff_lock:
+		if o.list_last == (conn_buff.gen, limit): return result # same list+window = no changes
+		for n in countdown(conn_buff.n-1, 0): append
+		for n in countdown(conn_buff.m-1, conn_buff.n+1): append
+		o.list_last = (conn_buff.gen, limit)
+
 type
 	Painter = object
 		conf: Conf
-		conn_list: proc (limit: int): seq[ConnInfo]
+		conn_list: proc (limit: int): seq[ConnInfo] # can return empty list for "no changes"
 		win: Window
 		rdr: Renderer
 		tex: Texture
@@ -295,11 +301,14 @@ type
 		uid_color: Color
 		line: string
 		fade_out_n = 0
+		listed = true
 		replaced = true
 
 proc `<`(a, b: PaintedRow): bool =
-	if a.replaced and not b.replaced: false
-	elif b.replaced and not a.replaced: true
+	## Used to pick "oldest" row to replace visually.
+	## Ones not "listed" in conn_list are replaced before ones that still are.
+	if a.listed and not b.listed: false
+	elif b.listed and not a.listed: true
 	elif a.ts_update != b.ts_update: a.ts_update < b.ts_update
 	else: a.ns < b.ns
 
@@ -387,10 +396,13 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 	var
 		conns_new: seq[ConnInfo]
 		r: PaintedRow
-	for r in o.rows.mvalues: r.replaced = false
-	for conn in o.conn_list(o.rows_draw):
+	let conn_list = o.conn_list(o.rows_draw)
+	if conn_list.len == 0: return result # no conns or no changes since last call
+	for r in o.rows.mvalues: r.listed = false; r.replaced = false
+	for conn in conn_list:
 		if o.rows.contains(conn.ns):
-			r = o.rows[conn.ns]; r.replaced = true # heap-sorts these last for replacement
+			r = o.rows[conn.ns]; if r.listed: continue
+			r.listed = true # heap-sorts these last for replacement
 			if r.line != conn.line: r.line = conn.line; r.ts_update = ts; result.add(r)
 			continue
 		conns_new.add(conn)
@@ -568,7 +580,10 @@ proc main(argv: seq[string]) =
 	var fifo_reader: Thread[Conf]
 	fifo_reader.create_thread(conn_reader, conf)
 
-	var paint = Painter(conf: conf, win: win, rdr: win_rdr, conn_list: conn_list)
+	var
+		conns = NetConns()
+		paint = Painter( conf: conf, win: win, rdr: win_rdr,
+			conn_list: (proc (rows: int): seq[ConnInfo] = conns.list(rows)) )
 	paint.init(); defer: paint.close()
 
 	var
