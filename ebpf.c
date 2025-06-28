@@ -37,7 +37,7 @@ struct conn_t { // ~93B
 	u8 ct; u64 ns; // CLOCK_MONOTONIC
 	u128 laddr; u128 raddr; u16 lport; u16 rport; // local/remote addr/port
 	u32 pid; u32 uid; char comm[TASK_COMM_LEN];
-	u64 trx_ns; u64 rx; u64 tx;
+	u64 ns_trx; u64 rx; u64 tx;
 } __attribute__((packed));
 
 struct {
@@ -61,8 +61,8 @@ static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
 	struct conn_t *connp = bpf_map_lookup_elem(&conn_map, &ck);
 	if (connp) { // pre-existing connection - update counters
 		if (bs < 0) connp->rx += -bs; else connp->tx += bs;
-		if (ns < (connp->trx_ns + CONN_TRX_UPD_NS)) return;
-		connp->trx_ns = ns; }
+		if (ns < (connp->ns_trx + CONN_TRX_UPD_NS)) return;
+		connp->ns_trx = ns; }
 
 	else { // new connection - gather socket/process info
 		struct conn_t conn;
@@ -88,7 +88,7 @@ static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
 		bpf_probe_read(&conn.rport, 2, &s->skc_dport);
 		conn.lport = bpf_htons(conn.lport);
 		conn.rport = bpf_htons(conn.rport);
-		conn.rx = 0; conn.tx = 0; conn.trx_ns = 0;
+		conn.rx = 0; conn.tx = 0; conn.ns_trx = 0;
 		if (bs < 0) conn.rx += -bs; else conn.tx += bs;
 		bpf_get_current_comm(&conn.comm, sizeof(conn.comm));
 		bpf_map_update_elem(&conn_map, &ck, &conn, BPF_ANY);

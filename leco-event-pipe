@@ -119,7 +119,7 @@ class BPFMap:
 
 	def ev_parse( self, ev, o=0,
 			_st=struct.Struct('<BQ16s16sHHII16sQQQ'), _ct_proto='tcp udp x'.split(),
-			_fields='ct ns laddr raddr lport rport pid uid comm trx_ns rx tx'.split(),
+			_fields='ct ns laddr raddr lport rport pid uid comm ns_trx rx tx'.split(),
 			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
 		e = adict(zip(_fields, _st.unpack_from(ev, offset=o)))
 		if not e.ct: return
@@ -187,7 +187,7 @@ class BPFMapRingBuffer(BPFMap):
 
 def ev_conv(e, cache=None, all_data=False):
 	# XXX: add aliases, resolve addrs to hosts/asns
-	ev = adict(ns=e.ns)
+	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
 	if not (cache and (u := cache.get(e.uid))):
 		try: u = pwd.getpwuid(e.uid).pw_name
 		except KeyError: u = str(e.uid)
@@ -216,8 +216,8 @@ def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
 	with select.epoll(sizehint=2) as poll:
 		ns_cache, ns_cutoff, ns = 0, 0, time.monotonic_ns()
 		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
-		for ev in sorted(cache.read(), key=lambda ev: ev.trx_ns):
-			if (ns_cache := ev.trx_ns) < ns_cutoff: continue
+		for ev in sorted(cache.read(), key=lambda ev: ev.ns_trx):
+			if (ns_cache := ev.ns_trx) < ns_cutoff: continue
 			if _dst_write(ev_proc(ev), ns): return
 		if not rb: return # one-off cache dump
 		poll.register(dst_fd := dst.fileno(), 0)
@@ -226,7 +226,7 @@ def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
 			if not (ev_fds := poll.poll(maxevents=1)): continue
 			if ev_fds[0][0] == dst_fd: break # dst pipe closed
 			for ev in rb.wait(0.1): # shouldn't actually need to wait
-				if ev.trx_ns <= ns_cache or ev.trx_ns < ns_cutoff: continue
+				if ev.ns_trx <= ns_cache or ev.ns_trx < ns_cutoff: continue
 				if _dst_write(ev_proc(ev), time.monotonic_ns()): return
 			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
 

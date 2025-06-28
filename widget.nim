@@ -202,6 +202,7 @@ type
 	CNS = int64 # nanoseconds-based connection ID
 	ConnInfo = tuple
 		ns: CNS
+		ns_trx: int64
 		line: string
 	ConnInfoBuffer = ptr object
 		n, m, gen: int # list = [n, m) + [0, n)
@@ -249,7 +250,8 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 			log_debug(&"fifo: {ev}")
 			try:
 				let ej = ev.parse_json
-				conn = (ns: int64(ej["ns"].getBiggestInt), line: ej["line"].getStr)
+				conn = ( ns: int64(ej["ns"].getBiggestInt),
+					ns_trx: int64(ej["ns_trx"].getBiggestInt), line: ej["line"].getStr )
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
 			with_lock conn_buff_lock:
@@ -271,7 +273,7 @@ proc list(o: var NetConns, limit: int, cache_cookie: int = 0): seq[ConnInfo] =
 	template append =
 		if result.len >= limit: break
 		let ev = conn_buff.buff[n]
-		`=copy`(line, ev.line); result.add (ns: ev.ns, line: line)
+		`=copy`(line, ev.line); result.add (ns: ev.ns, ns_trx: ev.ns_trx, line: line)
 	with_lock conn_buff_lock:
 		if o.list_last == (conn_buff.gen, limit, cache_cookie): return result # no changes
 		for n in countdown(conn_buff.n-1, 0): append
@@ -296,6 +298,7 @@ type
 	PaintedRow = ref object
 		n: int
 		ns: CNS
+		ns_trx: int64
 		ts_update: int64
 		uid: string
 		uid_color: Color
@@ -403,7 +406,8 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		if o.rows.contains(conn.ns):
 			r = o.rows[conn.ns]; if r.listed: continue
 			r.listed = true # heap-sorts these last for replacement
-			if r.line != conn.line: r.line = conn.line; r.ts_update = ts; result.add(r)
+			if conn.ns_trx > r.ns_trx or r.line != conn.line:
+				r.ns_trx = conn.ns_trx; r.line = conn.line; r.ts_update = ts; result.add(r)
 			continue
 		conns_new.add(conn)
 	if conns_new.len == 0: return result
@@ -415,7 +419,7 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		elif rows_replace.len != 0: # replace row
 			r = rows_replace.pop; o.rows.del(r.ns); r.replaced = true
 		else: log_debug(&"draw: no slot for new conn {conn}"); continue
-		r.ns = conn.ns; r.line = conn.line; r.ts_update = ts
+		r.ns = conn.ns; r.ns_trx = r.ns_trx; r.line = conn.line; r.ts_update = ts
 		(r.uid, r.uid_color) = o.row_uid(conn.ns)
 		o.rows[conn.ns] = r; result.add(r)
 
