@@ -131,6 +131,7 @@ More specifically:
 
     - Rate-limit leco-event-pipe updates, in addition to rate-limit in ebpf.
     - Parse more config-file values, like colors and such.
+    - Additional fade curve for always-active connections, with separate cap on alpha.
     - Cgroup information for displayed network connections.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.

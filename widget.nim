@@ -406,7 +406,7 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		if o.rows.contains(conn.ns):
 			r = o.rows[conn.ns]; if r.listed: continue
 			r.listed = true # heap-sorts these last for replacement
-			if conn.ns_trx > r.ns_trx or r.line != conn.line:
+			if conn.ns_trx > r.ns_trx:
 				r.ns_trx = conn.ns_trx; r.line = conn.line; r.ts_update = ts; result.add(r)
 			continue
 		conns_new.add(conn)
