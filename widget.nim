@@ -26,8 +26,8 @@ type Conf = ref object
 	line_uid_fmt = "#$1"
 	line_fade_ns: int64 = 60 * 1_000_000_000
 	line_fade_curve = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
-	color_bg = Color(r:0, g:12, b:0, a:40)
-	color_fg = Color(r:0xe4, g:0xe4, b:0xe4, a:0xff)
+	color_bg = Color(r:0, g:0x0c, b:0, a:0x66)
+	color_fg = Color(r:0xff, g:0xff, b:0xff, a:0xff)
 	run_fifo = ""
 	run_fifo_buff_sz = 200
 	run_debug = false
@@ -142,6 +142,12 @@ proc parse_conf_file(conf_path: string): Conf =
 		result = (y0: a, y1: b, points: points)
 		log_debug(&"line-fade-curve: final shape {result}")
 
+	proc parse_color(val: string): Color =
+		if val.len != 8: raise ValueError.new_exception("rgba: should be 8 hex-digits long")
+		let c = val.fromHex[:uint32]
+		return Color( r: uint8((c shr 24) and 0xff),
+			g: uint8((c shr 16) and 0xff), b: uint8((c shr 8) and 0xff), a: uint8(c and 0xff) )
+
 	template section(sec: string, checks: typed) =
 		if name == sec and key != "":
 			try: checks
@@ -168,6 +174,8 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "frames-per-second-max":
 					let fps = val.parse_float
 					if fps > 0: conf.win_upd_ns = int64(1_000_000_000 / fps)
+				of "rgba-bg": conf.color_bg = val.parse_color
+				of "rgba-fg": conf.color_fg = val.parse_color
 				else: section_val_unknown
 			section "text":
 				case key:
@@ -178,11 +186,14 @@ proc parse_conf_file(conf_path: string): Conf =
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
 					else: conf_text_hx = val.parse_float * -1
 				of "line-fade-time": conf.line_fade_ns = int64(val.parse_float * 1e9)
-				of "line-fade-curve": conf.line_fade_curve = parse_curve(val)
+				of "line-fade-curve": conf.line_fade_curve = val.parse_curve
+				of "line-uid-chars": conf.line_uid_chars = val.parse_int
+				of "line-uid-fmt": conf.line_uid_fmt = val
 				else: section_val_unknown
 			section "run":
 				case key:
 				of "fifo": conf.run_fifo = val
+				of "conn-list-cache": conf.run_fifo_buff_sz = val.parse_int
 				of "debug": conf.run_debug = case val
 					of "y","yes","true","1","on": true
 					of "n","no","false","0","off": false
