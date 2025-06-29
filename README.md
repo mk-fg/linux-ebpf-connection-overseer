@@ -130,8 +130,8 @@ More specifically:
 - Finish implementing all the stuff planned from the start.
 
     - Rate-limit leco-event-pipe updates, in addition to rate-limit in ebpf.
-    - Parse more config-file values, like colors and such.
-    - Additional fade curve for always-active connections, with separate cap on alpha.
+    - Regexp to aggregate all matching conns into one slot.
+    - Additional fade curve for lingering connections, with timeout, setting cap on alpha.
     - Cgroup information for displayed network connections.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.

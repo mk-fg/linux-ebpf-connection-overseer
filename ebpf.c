@@ -4,8 +4,6 @@
 // XXX: re-add kprobes for wireguard tunnels
 // XXX: test how tracepoints work with firewalled conns
 // XXX: check packets on some skb-egress hook, mark in maps which ones get through
-// XXX: add cgroup id's to maps, resolve cgroup ids to names here if possible
-// XXX: check socket helper funcs for simpler/reliable ways to get socket info
 
 #define KBUILD_MODNAME "leco"
 
@@ -37,12 +35,13 @@ struct conn_t { // ~93B
 	u8 ct; u64 ns; // CLOCK_MONOTONIC
 	u128 laddr; u128 raddr; u16 lport; u16 rport; // local/remote addr/port
 	u32 pid; u32 uid; char comm[TASK_COMM_LEN];
-	u64 ns_trx; u64 rx; u64 tx;
+	u64 ns_trx; u64 rx; u64 tx; u64 cg;
 } __attribute__((packed));
 
+struct conn_map_key { u64 sk; u32 pid; } __attribute__((packed));
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
-	__type(key, u64);
+	__type(key, struct conn_map_key);
 	__type(value, struct conn_t);
 	__uint(max_entries, 1000);
 } conn_map SEC(".maps");
@@ -54,9 +53,14 @@ struct {
 
 
 static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
-	// It'd be nice to use skc_cookie here, but it's not pre-generated reliably (on 6.12)
-	u64 ck = (u64) sk; // dunno if these addrs change, but it's an easy key if works
+	// It'd be nice to use skc_cookie for ck key, but it's not pre-generated,
+	//  and bpf_get_socket_cookie can only be triggered from fprobe,
+	//  which require BTF and such fancier kernel debug data - more dependencies.
+	// Using sk addr + pid should be enough, unless pid recycles sockets too fast,
+	//  in which case it won't be useful to display its connections separately anyway.
 	u64 ns = bpf_ktime_get_ns();
+	u32 pid = bpf_get_current_pid_tgid() >> 32;
+	struct conn_map_key ck = { .sk = (u64) sk, .pid = pid };
 
 	struct conn_t *connp = bpf_map_lookup_elem(&conn_map, &ck);
 	if (connp) { // pre-existing connection - update counters
@@ -76,8 +80,9 @@ static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
 			proto == IPPROTO_UDP ? (af == AF_INET ? CT_UDP4 : CT_UDP6) :
 			af == AF_INET ? CT_X4 : CT_X6 ;
 		conn.ns = ns;
-		conn.pid = bpf_get_current_pid_tgid() >> 32;
+		conn.pid = pid;
 		conn.uid = bpf_get_current_uid_gid() & 0xffffffff;
+		conn.cg = bpf_get_current_cgroup_id();
 		if (af == AF_INET) {
 			bpf_probe_read(&conn.laddr, 4, &s->skc_rcv_saddr);
 			bpf_probe_read(&conn.raddr, 4, &s->skc_daddr); }

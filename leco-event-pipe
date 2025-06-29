@@ -139,8 +139,8 @@ class BPFMap:
 		if self.fd_close and self.fd is not None: os.close(self.fd); self.fd = None
 
 	def ev_parse( self, ev, o=0,
-			_st=struct.Struct('<BQ16s16sHHII16sQQQ'), _ct_proto='tcp udp x'.split(),
-			_fields='ct ns laddr raddr lport rport pid uid comm ns_trx rx tx'.split(),
+			_st=struct.Struct('<BQ16s16sHHII16sQQQQ'), _ct_proto='tcp udp x'.split(),
+			_fields='ct ns laddr raddr lport rport pid uid comm ns_trx rx tx cg'.split(),
 			_ct_af=((so.AddressFamily.AF_INET6, 16), (so.AddressFamily.AF_INET, 4)) ):
 		e = adict(zip(_fields, _st.unpack_from(ev, offset=o)))
 		if not e.ct: return
@@ -149,7 +149,7 @@ class BPFMap:
 		e.comm = e.comm.rstrip(b'\0').decode()
 		return e
 
-class BPFMapU64HashTable(BPFMap):
+class BPFMapHashTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
 	#   so using "low-level" api here, which is same thing but with less hassle.
 	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway.
@@ -158,9 +158,10 @@ class BPFMapU64HashTable(BPFMap):
 		self.libbpf_init()
 		self.fd, info_fn = self.map_fd(fd, path), self._libbpf.bpf_map_get_info_by_fd
 		info, n = self._map_info(), ct.c_uint(n0 := ct.sizeof(self._map_info))
-		if info_fn(self.fd, ct.byref(info), ct.byref(n)) or n.value < n0 or info.key != 8:
+		if info_fn(self.fd, ct.byref(info), ct.byref(n)) or n.value < n0:
 			raise BPFError(f'libbpf bpf_map_get_info failed [fd={fd} path={path}]')
-		self.name, self.vsz, self.n = info.name.decode(), info.value, info.entires
+		self.name, self.n = info.name.decode(), info.entires
+		self.ksz, self.vsz = info.key, info.value
 		self.batch_flags = self._map_batch_opts(sz=ct.sizeof(self._map_batch_opts))
 
 	def read(self, batch=64):
@@ -168,16 +169,16 @@ class BPFMapU64HashTable(BPFMap):
 		#  always set sequentially, but values are zeroed-out for unused elements.
 		# ENOENT shouldn't happen here, but indicates that q goes beyond max_entries.
 		vals, a, b = list(), ct.pointer(ct.c_void_p()), ct.pointer(ct.c_void_p())
-		q, vb_data = ct.c_uint(), bytearray((vsz := self.vsz) * batch)
-		kb, vb = (ct.c_ulonglong*batch)(), ct.c_char.from_buffer(vb_data)
-		kb_p, vb_p, q_p = (ct.pointer(v) for v in [kb, vb, q])
+		kb_data, vb_data = (bytearray(n * batch) for n in [self.ksz, self.vsz])
+		kb, vb = ct.c_char.from_buffer(kb_data), ct.c_char.from_buffer(vb_data)
+		q = ct.c_uint(); kb_p, vb_p, q_p = (ct.pointer(v) for v in [kb, vb, q])
 		while c := self.n - len(vals):
 			c = q.value = min(batch, c)
 			if err := self._libbpf.bpf_map_lookup_batch( self.fd,
 					None if not vals else a, b, kb_p, vb_p, q_p, self.batch_flags ):
 				if -err != errno.ENOENT: raise BPFError('bpf_map_lookup_batch failed')
 			for n in range(q.value):
-				if not (ev := self.ev_parse(vb_data, n*vsz)): return vals
+				if not (ev := self.ev_parse(vb_data, n*self.vsz)): return vals
 				vals.append(ev)
 			if err or q.value < c: break
 			a, b = b, a
@@ -294,7 +295,7 @@ def main(argv=None):
 			if all(re.search(r'__v\d$', k) for k in sd_fds.split(':')) # versioned fds
 			else adict((k, 3 + n) for n, k in enumerate(sd_fds.split(':'))) )
 		bpf_rb = BPFMapRingBuffer(sd_fds.updates)
-		bpf_cache = BPFMapU64HashTable(sd_fds.conn_map)
+		bpf_cache = BPFMapHashTable(sd_fds.conn_map)
 		if sd_sock := os.environ.get('NOTIFY_SOCKET'):
 			if sd_sock[0] not in ('/', '@'): parser.error('Unsupported sd_notify socket')
 			if sd_sock[0] == '@': sd_sock = '\0' + sd_sock[1:]
@@ -304,7 +305,7 @@ def main(argv=None):
 	else:
 		p_maps = pl.Path(opts.pin) / 'maps'
 		bpf_rb = BPFMapRingBuffer(path=p_maps / 'updates')
-		bpf_cache = BPFMapU64HashTable(path=p_maps / 'conn_map')
+		bpf_cache = BPFMapHashTable(path=p_maps / 'conn_map')
 
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_cache as cache:
