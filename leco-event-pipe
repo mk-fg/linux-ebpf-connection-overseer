@@ -6,7 +6,7 @@
 
 import collections as cs, ipaddress as ip, pathlib as pl
 import ctypes as ct, socket as so, functools as ft
-import os, sys, re, struct, errno, time, json, pwd, signal, select, math
+import os, sys, re, struct, errno, time, json, pwd, signal, select, math, string
 
 
 class adict(dict):
@@ -97,6 +97,44 @@ class TimedCacheDict(cs.UserDict):
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
 err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
+
+
+class CgroupMap:
+	'Resolves cgroup_id into cgfs-relative path str efficiently'
+	# cgroup ids should be persistent, monotonically increasing
+	# There's no need to cache anything but ids, as direntries have them alongside names
+	# Does not check for recursively-mounted subdirs - will go into inf-loop there
+
+	def __init__(self, cache_timeout=2*3600, cgfs='/sys/fs/cgroup'):
+		self.cgfs, self.cache = cgfs, TimedCacheDict(cache_timeout)
+		self.cg_iter = self.cg_iter_func(); next(self.cg_iter)
+
+	def cg_iter_func(self, end=StopIteration):
+		'''Infinite iterator yielding relative cgid path str
+			from cache or from continued/repeated cgfs scans.'''
+		q, cgfs_len = cs.deque(), len(self.cgfs) + 1
+		cgid_loop, cgid_get = ..., (yield) or 1
+		while cgid_get is not end:
+			if cgid_loop == cgid_get: # full scan failed to find cgid
+				self.cache[cgid_get] = '' # negative cache - cgroup is likely gone
+				while cgid_get in self.cache: cgid_get = yield self.cache[cgid_get]
+			cgid_loop = cgid_get
+			q.append(self.cgfs)
+			while q:
+				if cgid_get is end: q.popleft(); continue
+				pp = q.popleft()
+				try:
+					for p in os.scandir(pp):
+						if not p.is_dir(follow_symlinks=False) or cgid_get is end: continue
+						self.cache[cgid := p.inode()] = (cgid_p := p.path[cgfs_len:])
+						if cgid_get == cgid:
+							while cgid_get in self.cache: cgid_get = yield self.cache[cgid_get]
+						q.append(p)
+				except OSError: pass # access issues or removed paths
+
+	def get(self, cgid):
+		if p := self.cache.get(cgid := int(cgid)): return p
+		return self.cg_iter.send(cgid)
 
 
 class BPFError(Exception): pass
@@ -207,20 +245,47 @@ class BPFMapRingBuffer(BPFMap):
 		return tuple(self.updates)
 
 
-def ev_conv(e, cache=None, all_data=False):
-	# XXX: add aliases, resolve addrs to hosts/asns
+def ev_conv_cg_label(cgid, cg_map, cache=None, cut=20):
+	'Resolves, cuts down, disambiguates and caches cgroup names'
+	if not (cgp0 := cg_map.get(cgid)): return
+	if cache and (cgn := cache.get(cgp0)): return cgn
+	cgs, cgp, cgns = '', cgp0, list()
+	cgsx = lambda n: re.sub(r'.(service|scope|slice)$', '', n)
+	while True:
+		cgn = cgsx(cgp.rsplit('/', 1)[-1]) + cgs
+		if len(cgn) > cut: cgn = f'{cgn[:cut-1]}+'
+		if cgn in cgns: # looping - generate simple num-prefixed id
+			cn = len(chars := string.ascii_letters + string.digits)
+			for n in range(9999):
+				s = ''
+				while n >= cn: s += chars[m := n // cn]; n -= m * cn
+				s += chars[n]
+				if (cgn := f'{cgns[0][:cut-2]}.{s}') not in cache: break
+		else: cgns.append(cgn)
+		if (cgp1 := cache and cache.get(cgn)) and cgp1 != cgp0: # same-label conflict
+			ps = tuple(map(cgsx, [cgp1, cgp0]))
+			if suff := os.path.commonpath(p[::-1] for p in ps): cgp = ps[-1][:-len(suff)-1]
+			cgs = f'/{cgn}'
+			if '/' in suff: cgs = f'/{cgs}'
+			continue
+		if isinstance(cache, dict) and not cgp1: cache[cgn], cache[cgp0] = cgp0, cgn
+		return cgn
+
+def ev_conv(e, cache=None, cg_label=None, all_data=False):
+	# XXX: resolve addrs to hosts/asns
 	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
-	if not (cache and (u := cache.get(e.uid))):
-		try: u = pwd.getpwuid(e.uid).pw_name
-		except KeyError: u = str(e.uid)
-		if cache is not None: cache[e.uid] = u
-	if not (cache and (ev_ts := cache.get(e.ns))):
+	if not (cache and (ev_ts := cache.get(e.ns))): # "conn started" time
 		ev_tt = time.localtime(time.time() - (time.monotonic_ns() - e.ns) / 1e9)
 		if (tt := time.localtime())[:3] == ev_tt[:3]: ev_ts = time.strftime('%H:%M', ev_tt)
 		else: ev_ts = td_repr(tt, ev_tt, units_max=1, fmt='-{}')
 		if cache is not None: cache[e.ns] = ev_ts
-	ev.line = ' :: '.join([ # XXX: "comm [cgroup]" instead of just comm
-		ev_ts, u, re.sub(r'::+', ':', e.comm),
+	if not (cache and (u := cache.get(e.uid))): # username
+		try: u = pwd.getpwuid(e.uid).pw_name
+		except KeyError: u = str(e.uid)
+		if cache is not None: cache[e.uid] = u
+	comm = re.sub(r'::+', ':', e.comm)
+	if cg_label and (cg := cg_label(e.cg)) and cg != comm: comm = f'{comm} [{cg}]'
+	ev.line = ' :: '.join([ ev_ts, u, comm,
 		f'{e.raddr} {e.rport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
 		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' ])
 	if all_data: ev = dict(e, **ev)
@@ -310,8 +375,12 @@ def main(argv=None):
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with bpf_rb as rb, bpf_cache as cache:
 		if opts.dump_cache: rb = None
-		stream_kws = dict( cache=cache, rb=rb, replay_limit=opts.replay_window,
-			ev_proc=ft.partial(ev_conv, cache=TimedCacheDict(5*60), all_data=opts.extra_ev_data) )
+		stream_kws = dict(
+			cache=cache, rb=rb, replay_limit=opts.replay_window,
+			ev_proc=ft.partial( ev_conv,
+				cg_label=ft.partial( ev_conv_cg_label,
+					cg_map=CgroupMap(), cut=20, cache=TimedCacheDict(30*60) ),
+				cache=TimedCacheDict(5*60), all_data=opts.extra_ev_data ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
 		# XXX: support sending to multiple receivers
 		while dst := openat2(opts.fifo, 'w'):
