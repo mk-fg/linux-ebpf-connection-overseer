@@ -130,14 +130,11 @@ More specifically:
 - Finish implementing all the stuff planned from the start.
 
     - Rate-limit leco-event-pipe updates, in addition to rate-limit in ebpf.
-    - Regexp to aggregate all matching conns into one slot.
     - Additional fade curve for lingering connections, with timeout, setting cap on alpha.
-    - Cgroup information for displayed network connections.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.
     - Nicer text with an outline.
     - Effects for new/faded connections added back to the list (glow/blur, slide, etc).
-    - Configurable aliases and filters for hosts/ports/etc in the output.
     - Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
     - Some screenshot and ascii diagram of components in this README.
 

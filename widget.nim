@@ -5,8 +5,8 @@
 # Usage info: ./leco-sdl-widget -h
 
 import std/[ strutils, strformat, parseopt, math,
-	os, osproc, logging, re, tables, heapqueue, monotimes, base64 ]
-import std/[ typedthreads, locks, posix, inotify, json ]
+	os, osproc, monotimes, logging, re, tables, sets, heapqueue ]
+import std/[ typedthreads, locks, posix, inotify, json, base64 ]
 import nsdl3 as sdl
 
 
@@ -31,9 +31,10 @@ type Conf = ref object
 	run_fifo = ""
 	run_fifo_buff_sz = 200
 	run_debug = false
+	rx_proc: seq[(Regex, string)]
+	rx_group: seq[(Regex, string)]
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
-	# XXX: configurable filtering section
 
 
 {.passl: "-lm"}
@@ -111,12 +112,11 @@ proc sdl_update_check(ts: int64 = -1): bool {.inline.} =
 
 
 proc parse_conf_file(conf_path: string): Conf =
-	# XXX: check that all parsed opts are in Conf and vice-versa
 	var
 		conf = Conf()
 		re_comm = re"^\s*([#;].*)?$"
 		re_name = re"^\s*\[(.*)\]\s*$"
-		re_var = re"^\s*(\S.*?)\s*(=\s*(\S.*?)?\s*(\s#.*)?)?$"
+		re_var = re"^\s*(\S.*?)\s*(=\s*(\S.*?)?\s*(\s#\s.*)?)?$"
 		line_n = 0
 		name = "-top-level-"
 		key, val: string
@@ -143,8 +143,9 @@ proc parse_conf_file(conf_path: string): Conf =
 		log_debug(&"line-fade-curve: final shape {result}")
 
 	proc parse_color(val: string): Color =
-		if val.len != 8: raise ValueError.new_exception("rgba: should be 8 hex-digits long")
-		let c = val.fromHex[:uint32]
+		let v = val.strip(chars={' ','#'})
+		if v.len != 8: raise ValueError.new_exception("rgba: color should be 8 hex-digits")
+		let c = v.from_hex[:uint32]
 		return Color( r: uint8((c shr 24) and 0xff),
 			g: uint8((c shr 16) and 0xff), b: uint8((c shr 8) and 0xff), a: uint8(c and 0xff) )
 
@@ -171,11 +172,11 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "init-height": conf.win_h = val.parse_int
 				of "pad-x": conf.win_px = val.parse_int
 				of "pad-y": conf.win_py = val.parse_int
+				of "rgba-bg": conf.color_bg = val.parse_color
+				of "rgba-fg": conf.color_fg = val.parse_color
 				of "frames-per-second-max":
 					let fps = val.parse_float
 					if fps > 0: conf.win_upd_ns = int64(1_000_000_000 / fps)
-				of "rgba-bg": conf.color_bg = val.parse_color
-				of "rgba-fg": conf.color_fg = val.parse_color
 				else: section_val_unknown
 			section "text":
 				case key:
@@ -199,6 +200,14 @@ proc parse_conf_file(conf_path: string): Conf =
 					of "n","no","false","0","off": false
 					else: raise ValueError.new_exception("Unrecognized boolean value")
 				else: section_val_unknown
+			if name == "rx-proc" or name == "rx-group":
+				var re_flags = {re_study, re_ignore_case}
+				if key.startswith("i:"): key = key.substr(2)
+				elif key.startswith("I:"): key = key.substr(2); re_flags.excl(re_ignore_case)
+				if val.startswith("\\ "): val = val.substr(1)
+				if val.endswith(" \\"): val = val[0 .. ^2]
+				let t = (re(key, re_flags), val); key = ""
+				if name == "rx-proc": conf.rx_proc.add t else: conf.rx_group.add t
 			if key != "": log_warn( "Unrecognized config" &
 				&" section [{name}] for '{key}' value on line {line_n} :: {line}" )
 		else: log_warn(&"Failed to parse config-file line {line_n} :: {line}")
@@ -213,6 +222,7 @@ type
 	CNS = int64 # nanoseconds-based connection ID
 	ConnInfo = tuple
 		ns: CNS
+		group: string
 		ns_trx: int64
 		line: string
 	ConnInfoBuffer = ptr object
@@ -222,6 +232,19 @@ type
 var # updated from fifo-conn-reader thread to use by NetConns
 	conn_buff: ConnInfoBuffer
 	conn_buff_lock: Lock
+
+proc sub(rx: Regex, by: string, s: string): tuple[match: bool, s: string] =
+  ## Similar to re.replacef, but also returns whether regexp matched anything.
+  var pos = 0; var caps: array[re.MaxSubpatterns, string]
+	while pos < s.len:
+		let m = s.findBounds(rx, caps, pos)
+		if m.first < 0: break
+		result.match = true
+		result.s.add s.substr(pos, m.first-1)
+		result.s.addf(by, caps)
+		if m.last + 1 == pos: break
+		pos = m.last + 1
+	result.s.add s.substr(pos)
 
 proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 	## Daemon thread that populates conn_buff.
@@ -261,10 +284,19 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 			log_debug(&"fifo: {ev}")
 			try:
 				let ej = ev.parse_json
-				conn = ( ns: int64(ej["ns"].getBiggestInt),
+				conn = ( ns: int64(ej["ns"].getBiggestInt), group: "",
 					ns_trx: int64(ej["ns_trx"].getBiggestInt), line: ej["line"].getStr )
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
+				continue
+			var res: tuple[match: bool, s: string]
+			for (rx, tpl) in conf.rx_group:
+				res = rx.sub(tpl, conn.line)
+				if not res.match: continue
+				if res.s != "": conn.group = res.s
+				break
+			if res.match and res.s == "": continue # empty group = drop line
+			for (rx, tpl) in conf.rx_proc: conn.line = conn.line.replacef(rx, tpl)
 			with_lock conn_buff_lock:
 				conn_buff.buff[conn_buff.n] = conn
 				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
@@ -275,26 +307,42 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 
 {.push base.}
 
-type NetConns = object
-	list_last: (int, int, int)
+type
+	NetConn = tuple # ConnInfo without internal fields for NetConns
+		ns: CNS
+		ns_trx: int64
+		line: string
+	NetConns = object
+		list_last: (int, int, int)
+		group_ns: Table[string, CNS] # oldest ns value used for group-slots
 
-proc list(o: var NetConns, limit: int, cache_cookie: int = 0): seq[ConnInfo] =
+proc list(o: var NetConns, limit: int, cache_cookie: int = 0): seq[NetConn] =
 	## Returns specified number of last-changed connections to display in a window.
-	var line: string # make sure to not ref shallow-copied strings shared with thread
+	var ns: CNS; var line: string; var groups: HashSet[string]
 	template append =
 		if result.len >= limit: break
 		let ev = conn_buff.buff[n]
-		`=copy`(line, ev.line); result.add (ns: ev.ns, ns_trx: ev.ns_trx, line: line)
+		`=copy`(line, ev.line) # make sure to not ref shallow-copied strings shared with thread
+		ns = ev.ns
+		if ev.group != "":
+			if groups.contains(ev.group): continue # only one conn per group is needed
+			if o.group_ns.has_key_or_put(ev.group, ev.ns): ns = o.group_ns[ev.group]
+			groups.incl(ev.group)
+		result.add (ns: ns, ns_trx: ev.ns_trx, line: line)
 	with_lock conn_buff_lock:
 		if o.list_last == (conn_buff.gen, limit, cache_cookie): return result # no changes
 		for n in countdown(conn_buff.n-1, 0): append
 		for n in countdown(conn_buff.m-1, conn_buff.n+1): append
 		o.list_last = (conn_buff.gen, limit, cache_cookie)
+	var groups_del: seq[string]
+	for group in o.group_ns.keys():
+		if not groups.contains(group): groups_del.add(group)
+	for group in groups_del: o.group_ns.del(group)
 
 type
 	Painter = object
 		conf: Conf
-		conn_list: proc (limit, cache_n: int): seq[ConnInfo] # empty result for "no changes"
+		conn_list: proc (limit, cache_n: int): seq[NetConn] # empty result for "no changes"
 		win: Window
 		rdr: Renderer
 		tex: Texture
@@ -364,7 +412,7 @@ method init(o: var Painter) =
 	o.txt_font = sdl.OpenFont(o.conf.font_file, o.conf.font_h)
 	o.txt_engine = sdl.CreateRendererTextEngine(o.rdr)
 	o.txt = o.txt_engine.CreateText(o.txt_font, "", 0)
-	o.txt.SetTextColor(o.conf.color_fg) # XXX: other font/text parameters
+	o.txt.SetTextColor(o.conf.color_fg)
 	(o.uid_w, _) = o.txt_font.GetStringSize( # W should be widest base64 letter
 		o.conf.line_uid_fmt % "W".repeat(o.conf.line_uid_chars) )
 	o.fade_out = o.init_fade_timeline()
@@ -408,7 +456,7 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 	## Returns updated/replaced rows that need to be repainted.
 	## For new conns, replaces oldest rows without a matching conn first.
 	var
-		conns_new: seq[ConnInfo]
+		conns_new: seq[NetConn]
 		r: PaintedRow
 	let conn_list = o.conn_list(o.rows_draw, o.rows.len)
 	if conn_list.len == 0: return result # no conns or no changes since last call
@@ -598,7 +646,7 @@ proc main(argv: seq[string]) =
 	var
 		conns = NetConns()
 		paint = Painter( conf: conf, win: win, rdr: win_rdr,
-			conn_list: (proc (rows, cache_n: int): seq[ConnInfo] = conns.list(rows, cache_n)) )
+			conn_list: (proc (rows, cache_n: int): seq[NetConn] = conns.list(rows, cache_n)) )
 	paint.init(); defer: paint.close()
 
 	var
