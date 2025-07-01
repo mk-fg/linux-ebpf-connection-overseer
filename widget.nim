@@ -4,7 +4,7 @@
 # Final build: nim c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget widget.nim
 # Usage info: ./leco-sdl-widget -h
 
-import std/[ strutils, strformat, parseopt, math,
+import std/[ strutils, strformat, parseopt, math, macros,
 	os, osproc, monotimes, logging, re, tables, sets, heapqueue ]
 import std/[ typedthreads, locks, posix, inotify, json, base64 ]
 import nsdl3 as sdl
@@ -19,6 +19,8 @@ type Conf = ref object
 	win_px = 0
 	win_py = 0
 	win_upd_ns: int64
+	win_flags = sdl.WINDOW_RESIZABLE or sdl.WINDOW_NOT_FOCUSABLE or
+		sdl.WINDOW_BORDERLESS or sdl.WINDOW_TRANSPARENT or sdl.WINDOW_UTILITY
 	font_file = ""
 	font_h = 14
 	line_h = 0 # to be calculated
@@ -35,6 +37,15 @@ type Conf = ref object
 	rx_group: seq[(Regex, string)]
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
+
+var conf_win_flags: Table[string, WindowFlags]
+macro conf_win_flags_table_init(names: string): untyped =
+	result = new_nim_node nnkStmtList
+	for k in names.str_val.split:
+		let c = ident("WINDOW_" & k.to_upper_ascii)
+		result.add(quote do: conf_win_flags[`k`] = `c`)
+conf_win_flags_table_init( "resizable borderless transparent" &
+	" utility always_on_top fullscreen minimized maximized not_focusable" )
 
 
 {.passl: "-lm"}
@@ -177,6 +188,10 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "frames-per-second-max":
 					let fps = val.parse_float
 					if fps > 0: conf.win_upd_ns = int64(1_000_000_000 / fps)
+				of "flags":
+					conf.win_flags = sdl.WindowFlags 0
+					for flag in val.split:
+						conf.win_flags = conf.win_flags or conf_win_flags[flag]
 				else: section_val_unknown
 			section "text":
 				case key:
@@ -284,8 +299,8 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 			log_debug(&"fifo: {ev}")
 			try:
 				let ej = ev.parse_json
-				conn = ( ns: int64(ej["ns"].getBiggestInt), group: "",
-					ns_trx: int64(ej["ns_trx"].getBiggestInt), line: ej["line"].getStr )
+				conn = ( ns: ej["ns"].getBiggestInt.CNS, group: "",
+					ns_trx: ej["ns_trx"].getBiggestInt.int64, line: ej["line"].getStr )
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
 				continue
@@ -322,8 +337,7 @@ proc list(o: var NetConns, limit: int, cache_cookie: int = 0): seq[NetConn] =
 	template append =
 		if result.len >= limit: break
 		let ev = conn_buff.buff[n]
-		`=copy`(line, ev.line) # make sure to not ref shallow-copied strings shared with thread
-		ns = ev.ns
+		ns = ev.ns; line = substr(ev.line) # make sure to not ref strings shared with thread
 		if ev.group != "":
 			if groups.contains(ev.group): continue # only one conn per group is needed
 			if o.group_ns.has_key_or_put(ev.group, ev.ns): ns = o.group_ns[ev.group]
@@ -627,8 +641,7 @@ proc main(argv: seq[string]) =
 	sdl.EnableScreenSaver() # gets disabled by default
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
-		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or sdl.WINDOW_RESIZABLE or
-			sdl.WINDOW_BORDERLESS or sdl.WINDOW_UTILITY or sdl.WINDOW_TRANSPARENT )
+		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or conf.win_flags )
 	defer: win_rdr.DestroyRenderer(); win.DestroyWindow()
 	win_rdr.SetRenderVSync(true)
 	win.SetWindowPosition(conf.win_ox, conf.win_oy)
