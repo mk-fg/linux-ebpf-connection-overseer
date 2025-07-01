@@ -20,23 +20,18 @@ def sz_repr(sz, _units=list(reversed(
 		if sz > u1: break
 	return f'{sz / u1:.1f}'.removesuffix('.0') + u
 
-def td_repr( ts, ts0=None, units_max=2, units_res=None, fmt=None,
+def td_repr( td, units_max=1, units_res=None, fmt=None,
 		_units=dict(h=3600,m=60,s=1,y=365.2422*86400,mo=30.5*86400,w=7*86400,d=1*86400) ):
-	if isinstance(ts, time.struct_time): ts = time.mktime(ts)
-	if isinstance(ts0, time.struct_time): ts0 = time.mktime(ts0)
-	delta = ts if ts0 is None else (ts - ts0)
-	res, s, n_last = list(), abs(delta), units_max - 1
+	res, s, n_last = list(), td, units_max - 1
 	units = sorted(_units.items(), key=lambda v: v[1], reverse=True)
-	for unit, unit_s in units:
-		if not (val := math.floor(val_raw := s / unit_s)):
+	for unit, us in units:
+		if not (val := math.floor(val_raw := s / us)):
 			if units_res == unit: break
 			continue
-		elif val_raw - val > 0.98: val += 1
-		if len(res) == n_last or units_res == unit:
-			val, n_last = round(s / unit_s), True
+		elif val_raw - val > 0.98 * us: val += 1
+		if len(res) == n_last or units_res == unit: val, n_last = round(s / us), True
 		res.append(f'{val:.0f}{unit}')
-		if n_last is True: break
-		if (s := s - val * unit_s) < 1: break
+		if n_last is True or not (s := s - val * us): break
 	if not res: return 'now'
 	res = ' '.join(res)
 	return res if not fmt else fmt.format(res)
@@ -110,7 +105,9 @@ class CgroupMap:
 		self.cg_iter = self.cg_iter_func(); next(self.cg_iter)
 
 	def __enter__(self): return self
-	def __exit__(self, *err): self.cg_iter.send(StopIteration)
+	def __exit__(self, *err):
+		try: self.cg_iter.send(StopIteration)
+		except StopIteration: pass
 
 	def cg_iter_func(self, end=StopIteration):
 		'''Infinite iterator yielding relative cgid path str
@@ -277,9 +274,9 @@ def ev_conv(e, all_data=False, cg_label=None, cache_uid=None, cache_ts=None):
 	# XXX: resolve addrs to hosts/asns
 	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
 	if not (cache_ts and (ev_ts := cache_ts.get(e.ns))): # "conn started" time
-		ev_tt = time.localtime(time.time() - (time.monotonic_ns() - e.ns) / 1e9)
-		if (tt := time.localtime())[:3] == ev_tt[:3]: ev_ts = time.strftime('%H:%M', ev_tt)
-		else: ev_ts = td_repr(tt, ev_tt, units_max=1, fmt='-{}')
+		if (td := (time.monotonic_ns() - e.ns) / 1e9) < 81000:
+			ev_ts = time.strftime('%H:%M', time.localtime(time.time() - td))
+		else: ev_ts = '{:>5s}'.format(td_repr(td, fmt='-{}'))
 		if cache_ts is not None: cache_ts[e.ns] = ev_ts
 	if not (cache_uid and (u := cache_uid.get(e.uid))): # username
 		try: u = pwd.getpwuid(e.uid).pw_name
