@@ -130,7 +130,7 @@ proc parse_conf_file(conf_path: string): Conf =
 		re_var = re"^\s*(\S.*?)\s*(=\s*(\S.*?)?\s*(\s#\s.*)?)?$"
 		line_n = 0
 		name = "-top-level-"
-		key, val: string
+		key0, key, val: string
 		conf_text_hx = 1.5
 		conf_text_gap = 0
 
@@ -173,7 +173,7 @@ proc parse_conf_file(conf_path: string): Conf =
 		if line =~ re_comm: continue
 		elif line =~ re_name: name = matches[0]
 		elif line =~ re_var:
-			key = matches[0].replace("_", "-"); val = matches[2]
+			key0 = matches[0]; key = key0.replace("_", "-"); val = matches[2]
 			section "window":
 				case key:
 				of "title": conf.win_title = val
@@ -217,11 +217,11 @@ proc parse_conf_file(conf_path: string): Conf =
 				else: section_val_unknown
 			if name == "rx-proc" or name == "rx-group":
 				var re_flags = {re_study, re_ignore_case}
-				if key.startswith("i:"): key = key.substr(2)
-				elif key.startswith("I:"): key = key.substr(2); re_flags.excl(re_ignore_case)
+				if key0.startswith("i:"): key0 = key0.substr(2)
+				elif key0.startswith("I:"): key0 = key0.substr(2); re_flags.excl(re_ignore_case)
 				if val.startswith("\\ "): val = val.substr(1)
 				if val.endswith(" \\"): val = val[0 .. ^2]
-				let t = (re(key, re_flags), val); key = ""
+				let t = (re(key0, re_flags), val); key = ""
 				if name == "rx-proc": conf.rx_proc.add t else: conf.rx_group.add t
 			if key != "": log_warn( "Unrecognized config" &
 				&" section [{name}] for '{key}' value on line {line_n} :: {line}" )
