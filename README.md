@@ -129,7 +129,10 @@ More specifically:
 
 - Finish implementing all the stuff planned from the start.
 
-    - Rate-limit leco-event-pipe updates, in addition to rate-limit in ebpf.
+    - conf: add syntax for splitting long lines - useful for curve points.
+    - conf.rx: some syntax for group+replace regexps, as those commonly repeat.
+    - pipe: rate-limit updates, in addition to rate-limit in ebpf.
+    - pipe: don't send backlog info on dead pids to new clients (optional).
     - Additional fade curve for lingering connections, with timeout, setting cap on alpha.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.

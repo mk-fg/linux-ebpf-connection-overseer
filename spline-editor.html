@@ -28,7 +28,7 @@ body {
 }
 
 .splinePointNumLabel, .export, .usage { margin-top: 10px; }
-#splineCode { width: 100%; }
+#splineCode { width: 100%; min-height: 4em; }
 .splineCodeCopy { position: absolute; right: 0; }
 </style>
 </head>
@@ -38,15 +38,15 @@ body {
 <div id="center">
 <div id="fig">
 	<div>
-		<h2>Easing/Tweening Curve Generator</h2>
+		<h2>Fade-curve Editor</h2>
 		Simple web editor to create and edit cardinal cubic spline passing through points, aka easing curves for tweening in animations.
 		Based on <a href="https://sneha-belkhale.github.io/threejs-spline-exporter/index.html">https://sneha-belkhale.github.io/threejs-spline-exporter/index.html</a>
 		<br>
-		<br><b>click points to move // ctrl or shift-click to add point // delete key to remove</b>
+		<br><b>click points to move // ctrl or shift-click to add point // delete key to remove // paste points + enter</b>
 	</div>
 
 <script type="text/javascript+protovis">
-let w = 896, h = 586, xs = 100, ys = 100, p = 3,
+let w = 896, h = 586, xs = 1000, ys = 100, p = 0,
 	interpolate = 'cardinal', segmented = false, controlClicked = false
 
 let points, resetPoints = count => {
@@ -56,31 +56,21 @@ let points, resetPoints = count => {
 resetPoints(4)
 
 let vis = new pv.Panel()
-	.width(w)
-	.height(h)
-	.fillStyle('#fff')
-	.strokeStyle('#ccc')
-	.lineWidth(4)
-	.antialias(false)
-	.margin(2)
-	.event('mousedown', function() (p = controlClicked ? points.push(this.mouse()) - 1 : p, this))
+	.width(w).height(h).fillStyle('#fff').strokeStyle('#ccc')
+	.lineWidth(4).antialias(false).margin(2).event('mousedown', function() {
+		if (controlClicked) p = points.push(this.mouse()) - 1
+		else { let pd, m = this.mouse(); points.forEach((d, n) => {
+			d = Math.sqrt(Math.pow(d.x-m.x, 2) + Math.pow(d.y-m.y, 2))
+			if (pd === undefined || d <= pd) { pd = d; p = n } }) }
+		return this })
 
-vis.add(pv.Line)
-	.data(() => points)
-	.left(d => d.x)
-	.top(d => d.y)
-	.interpolate(() => interpolate)
-	.segmented(() => segmented)
+vis.add(pv.Line).data(() => points)
+	.left(d => d.x).top(d => d.y).interpolate(() => interpolate)
+	.segmented(() => segmented).tension(0.5).lineWidth(2)
 	.strokeStyle(pv.Colors.category10().by(pv.index))
-	.tension(0.5)
-	.lineWidth(2)
 
 vis.add(pv.Dot)
-	.data(() => points)
-	.left(d => d.x)
-	.top(d => d.y)
-	.radius(7)
-	.cursor('move')
+	.data(() => points).left(d => d.x).top(d => d.y).radius(7).cursor('move')
 	.strokeStyle(function() p == this.index ? '#ff7f0e' : '#1f77b4')
 	.fillStyle(function() this.strokeStyle().alpha(.2))
 	.event('mousedown', pv.Behavior.drag())
@@ -91,12 +81,10 @@ vis.render()
 
 let codeGen = () => {
 	let code = ''
-	points.forEach((p, idx) => {
-		let rx = p.x / w
-		let ry = 1.0 - p.y / h
-		code += Math.round(rx * xs) + ',' + Math.round(ry * ys)
-		if (idx !== points.length-1) code += ' ' })
-	return code }
+	points.forEach((d, n) => {
+		let ps = Math.round(d.x * xs/w) + ',' + Math.round(ys * (1 - d.y/h))
+		if (n === p) ps = ` ${ps} `; code += `${ps} ` })
+	return code.trim() }
 
 let splineCode = document.getElementById('splineCode'),
 	splineResetButton = document.getElementById('splinePointReset'),
@@ -114,11 +102,17 @@ pv.listen(window, 'mouseup', () => {
 	self.focus(); splineCode.value = codeGen() })
 
 pv.listen(window, 'keydown', e => {
-	if ((e.keyCode == 8 || e.keyCode == 46) && (p >= 0)) {
+	if (e.keyCode == 46 && p >= 0) {
 		points.splice(p--, 1)
 		vis.render()
 		e.preventDefault()
 		splineCode.value = codeGen() }
+	if (e.keyCode == 13) {
+		points = splineCode.value.split(/\s+/)
+			.filter(d => d.match(/\d+,\d+/)).map(d => {
+				let [x, y] = d.split(',')
+				return {x: parseInt(x) * w/xs, y: h * (1 - parseInt(y)/ys)} })
+		splinePointNum.value = points.length; vis.render() }
 	if ([16, 17].includes(e.keyCode)) controlClicked = true })
 
 pv.listen(window, 'keyup', e => {
@@ -140,7 +134,7 @@ copyFunc = () => {
 	</div>
 	<div class="usage">
 		<b>Usage:</b>
-		[text] fade-out-bezier-tween = ...
+		[text] line-fade-curve = ...
 	</div>
 </div> <!-- fig -->
 </div> <!-- center -->

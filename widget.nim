@@ -38,9 +38,9 @@ type Conf = ref object
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
 
-var conf_win_flags: Table[string, WindowFlags]
+var conf_win_flags: Table[string, WindowFlags] # populated at compile-time
 macro conf_win_flags_table_init(names: string): untyped =
-	result = new_nim_node nnkStmtList
+	result = new_nim_node nnk_stmt_list
 	for k in names.str_val.split:
 		let c = ident("WINDOW_" & k.to_upper_ascii)
 		result.add(quote do: conf_win_flags[`k`] = `c`)
