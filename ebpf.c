@@ -38,7 +38,10 @@ struct conn_t { // ~93B
 	u64 ns_trx; u64 rx; u64 tx; u64 cg;
 } __attribute__((packed));
 
-struct conn_map_key { u64 sk; u32 pid; } __attribute__((packed));
+struct conn_map_key { // has ports to avoid clashes on sk addr reuse
+	u64 sk; u32 pid; u32 ports;
+} __attribute__((packed));
+
 struct {
 	__uint(type, BPF_MAP_TYPE_LRU_HASH);
 	__type(key, struct conn_map_key);
@@ -56,11 +59,11 @@ static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
 	// It'd be nice to use skc_cookie for ck key, but it's not pre-generated,
 	//  and bpf_get_socket_cookie can only be triggered from fprobe,
 	//  which require BTF and such fancier kernel debug data - more dependencies.
-	// Using sk addr + pid should be enough, unless pid recycles sockets too fast,
-	//  in which case it won't be useful to display its connections separately anyway.
+	// Using sk addr + misc chaff should hopefully be unique enough for this tool.
 	u64 ns = bpf_ktime_get_ns();
 	u32 pid = bpf_get_current_pid_tgid() >> 32;
 	struct conn_map_key ck = { .sk = (u64) sk, .pid = pid };
+	bpf_probe_read(&ck.ports, 4, &sk->__sk_common.skc_portpair);
 
 	struct conn_t *connp = bpf_map_lookup_elem(&conn_map, &ck);
 	if (connp) { // pre-existing connection - update counters
