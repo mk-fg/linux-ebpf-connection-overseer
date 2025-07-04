@@ -123,16 +123,6 @@ proc sdl_update_check(ts: int64 = -1): bool {.inline.} =
 
 
 proc parse_conf_file(conf_path: string): Conf =
-	var
-		conf = Conf()
-		re_comm = re"^\s*([#;].*)?$"
-		re_name = re"^\s*\[(.*)\]\s*$"
-		re_var = re"^\s*(\S.*?)\s*(=\s*(\S.*?)?\s*(\s#\s.*)?)?$"
-		line_n = 0
-		name = "-top-level-"
-		key0, key, val: string
-		conf_text_hx = 1.5
-		conf_text_gap = 0
 
 	proc parse_curve(val: string): tuple[y0: float, y1: float, points: seq[float]] =
 		var
@@ -160,6 +150,19 @@ proc parse_conf_file(conf_path: string): Conf =
 		return Color( r: uint8((c shr 24) and 0xff),
 			g: uint8((c shr 16) and 0xff), b: uint8((c shr 8) and 0xff), a: uint8(c and 0xff) )
 
+	var
+		conf = Conf()
+		re_comm = re"^\s*([#;].*)?$"
+		re_name = re"^\s*\[(.*)\]\s*$"
+		re_var = re"^\s*(\S.*?)\s*(=\s*(\S.*?)?\s*(\s#\s.*)?)?$"
+		re_var_cont = re"^\s+(\S.*?)\s*(\s#\s.*)?$"
+		conf_text_hx = 1.5
+		conf_text_gap = 0
+		lines = (readFile(conf_path) & "\n[end]").split_lines
+		line_n = 0
+		name = "-top-level-"
+		line, key0, key, val: string
+
 	template section(sec: string, checks: typed) =
 		if name == sec and key != "":
 			try: checks
@@ -168,12 +171,19 @@ proc parse_conf_file(conf_path: string): Conf =
 			key = ""
 	template section_val_unknown = log_warn(
 		&"Ignoring unrecognized config-option line {line_n} under [{name}] :: {line}" )
-	for line in (readFile(conf_path) & "\n[end]").split_lines:
-		line_n += 1
+
+	while line_n < lines.len:
+		line = lines[line_n]; line_n += 1
 		if line =~ re_comm: continue
 		elif line =~ re_name: name = matches[0]
 		elif line =~ re_var:
+			# XXX: only need key0 for regexps, which should be formatted differently anyway
 			key0 = matches[0]; key = key0.replace("_", "-"); val = matches[2]
+			while line_n < lines.len: # add-up continuation lines
+				let line_cont = lines[line_n]
+				if line_cont =~ re_var_cont: val.add " "; val.add matches[0]; line_n += 1
+				else: break
+
 			section "window":
 				case key:
 				of "title": conf.win_title = val
@@ -193,6 +203,7 @@ proc parse_conf_file(conf_path: string): Conf =
 					for flag in val.split:
 						conf.win_flags = conf.win_flags or conf_win_flags[flag]
 				else: section_val_unknown
+
 			section "text":
 				case key:
 				of "font": conf.font_file = val
@@ -206,6 +217,7 @@ proc parse_conf_file(conf_path: string): Conf =
 				of "line-uid-chars": conf.line_uid_chars = val.parse_int
 				of "line-uid-fmt": conf.line_uid_fmt = val
 				else: section_val_unknown
+
 			section "run":
 				case key:
 				of "fifo": conf.run_fifo = val
@@ -215,6 +227,7 @@ proc parse_conf_file(conf_path: string): Conf =
 					of "n","no","false","0","off": false
 					else: raise ValueError.new_exception("Unrecognized boolean value")
 				else: section_val_unknown
+
 			if name == "rx-proc" or name == "rx-group":
 				var re_flags = {re_study, re_ignore_case}
 				if key0.startswith("i:"): key0 = key0.substr(2)
@@ -223,6 +236,7 @@ proc parse_conf_file(conf_path: string): Conf =
 				if val.endswith(" \\"): val = val[0 .. ^2]
 				let t = (re(key0, re_flags), val); key = ""
 				if name == "rx-proc": conf.rx_proc.add t else: conf.rx_group.add t
+
 			if key != "": log_warn( "Unrecognized config" &
 				&" section [{name}] for '{key}' value on line {line_n} :: {line}" )
 		else: log_warn(&"Failed to parse config-file line {line_n} :: {line}")
@@ -651,7 +665,7 @@ proc main(argv: seq[string]) =
 			&" be XRGB8888, but is actually {pxfmt.GetPixelFormatName()}" )
 
 	conn_buff = cast[ConnInfoBuffer](alloc_shared0(
-		sizeof(ConnInfoBuffer) + sizeof(ConnInfo) * conf.run_fifo_buff_sz ))
+		sizeof(default(ConnInfoBuffer)[]) + sizeof(ConnInfo) * conf.run_fifo_buff_sz ))
 	conn_buff_lock.init_lock(); defer: conn_buff_lock.release()
 	var fifo_reader: Thread[Conf]
 	fifo_reader.create_thread(conn_reader, conf)

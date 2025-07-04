@@ -100,8 +100,8 @@ class CgroupMap:
 	# There's no need to cache anything but ids, as direntries have them alongside names
 	# Does not check for recursively-mounted subdirs - will go into inf-loop there
 
-	def __init__(self, cache_timeout=2*3600, cgfs='/sys/fs/cgroup'):
-		self.cgfs, self.cache = cgfs, TimedCacheDict(cache_timeout)
+	def __init__(self, cache, cgfs='/sys/fs/cgroup'):
+		self.cache, self.cgfs = cache, cgfs
 		self.cg_iter = self.cg_iter_func(); next(self.cg_iter)
 
 	def __enter__(self): return self
@@ -372,7 +372,8 @@ def main(argv=None):
 		bpf_cache = BPFMapHashTable(path=p_maps / 'conn_map')
 
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
-	with bpf_rb as rb, bpf_cache as cache, CgroupMap() as cg_map:
+	with ( bpf_rb as rb, bpf_cache as cache,
+			CgroupMap(cache=TimedCacheDict(4*3600)) as cg_map ):
 		if opts.dump_cache: rb = None
 		stream_kws = dict(
 			cache=cache, rb=rb, replay_limit=opts.replay_window,
@@ -380,7 +381,7 @@ def main(argv=None):
 				all_data=opts.extra_ev_data,
 				cg_label=ft.partial( ev_conv_cg_label,
 					cg_map=cg_map, cut=20, cache=TimedCacheDict(30*60) ),
-				cache_uid=TimedCacheDict(5*60),
+				cache_uid=TimedCacheDict(4*3600),
 				cache_ts=TimedCacheDict(3600, bump_on_get=False) ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
 		# XXX: support sending to multiple receivers
