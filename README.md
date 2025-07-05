@@ -1,21 +1,28 @@
 Linux eBPF Connection Overseer
 ==============================
 
-Network monitoring tool intended to export or display info about both
-functioning and blocked network connections, with associated process/cgroup
-information, as well as traffic counters on those.
+Network monitoring tool intended to export or display info about
+any network connections, with associated process/cgroup information,
+as well as traffic counters on those, in a way similar to [conky] tool.
 
-Idea here is to have a minimally intrusive non-interactive window into network
-access attempts for systemd cgroups on the machine, to easily spot anything
-blocked or unexpected.
-
-It's a work in progress, not supposed to be functional just yet.
+Idea is to have a minimally intrusive non-interactive overlay window into
+network access attempts of/to various local apps on a second monitor somewhere,
+with relatively clean and useful info, incl. systemd cgroups and processes
+filtered/grouped as-needed by configurable regexps, to easily spot anything
+new, odd or unexpected.
 
 Table of Contents
 
 - [Technical details](#hdr-technical_details)
-- [Build / Requirements](#hdr-build___requirements)
+
+- [Build / Requirements]
+
+- [Usage](#hdr-usage)
+
+    - [Regular expressions in \[rx-\*\] sections]
+
 - [Known limitations and things to improve later]
+
 - [Links](#hdr-links)
 
 Repository URLs:
@@ -24,6 +31,10 @@ Repository URLs:
 - <https://codeberg.org/mk-fg/linux-ebpf-connection-overseer>
 - <https://fraggod.net/code/git/linux-ebpf-connection-overseer>
 
+[conky]: https://en.wikipedia.org/wiki/Conky_(software)
+[Build / Requirements]: #hdr-build___requirements
+[Regular expressions in \[rx-\*\] sections]:
+  #hdr-regular_expressions_in_rx-_sections
 [Known limitations and things to improve later]:
   #hdr-known_limitations_and_things_to_improve_later
 
@@ -42,17 +53,17 @@ Consists of several components:
     Without pinning, when service stops, fds get closed, which cleans up eBPFs as well.
 
 - Unprivileged [leco-event-pipe] system-daemon python script that uses eBPF map
-  file descriptors to monitor for network-related info, filter and export it to
-  some fifo socket as json lines.
+  file descriptors (passed to it) to monitor network connection events, augment,
+  filter and export those to some fifo socket/pipe as json lines.
 
     [leco.service] systemd unit file can be used to run loader binary and start this script.
 
-- Desktop session [leco-sdl-widget] to read that data and visualize in a relatively simple way.
+- Desktop session [leco-sdl-widget] to read event info and visualize in a relatively simple way.
 
 It's kinda similar to [OpenSnitch] and [netatop-bpf] projects (and is partly based
-on those), with simple non-interactive read-only scope, conky-like transparent
-window/overlay graphical frontend, and privileged access limited to reading data
-from eBPF map fds passed to it.
+on those), with simple non-interactive read-only scope, [conky]-like transparent
+window/overlay graphical frontend, and privileged access limited to loading persistent
+data-collection eBPFs once.
 
 [leco-ebpf-load]: loader.c
 [eBPF]: https://docs.ebpf.io/
@@ -71,7 +82,8 @@ In short:
 
 - Build-only dependencies/tools: [cmake], [make], [llvm], [clang], [Nim].
 
-- Runtime dependencies: [python], [libbpf], [SDL3], [SDL3_ttf], kernel with eBPF/kprobes enabled.
+- Runtime dependencies: [python], [libbpf], [SDL3], [SDL3_ttf],
+  linux 6.3+ kernel with eBPF tracepoints enabled.
 
 - Outputs: leco-ebpf-load, leco-event-pipe, leco-sdl-widget, leco-sdl-widget.ini, leco.service
 
@@ -106,11 +118,13 @@ More specifically:
   submodule dependency), and only [SDL3] + [SDL3_ttf] (Simple DirectMedia Layer 3.x)
   libraries installed on the system in order to run.
 
-  Will not work with older SDL 1.x and 2.x library branches (different API).
+    Will not work with older SDL 1.x and 2.x library branches (different API).
 
-  `git submodule init && git submodule update` needs to be run first
-  to fetch tinyspline build dependency library.
-  Can be built separately using `make leco-sdl-widget` command.
+    `git submodule init && git submodule update` needs to be run first
+    to fetch tinyspline build-time dependency library.\
+    Can be built separately using `make leco-sdl-widget` command.
+
+Running `make` without parameters includes building all these components.
 
 [cmake]: https://cmake.org/
 [make]: https://www.gnu.org/software/make
@@ -124,15 +138,118 @@ More specifically:
 [tinyspline]: https://github.com/msteinbeck/tinyspline/
 
 
+<a name=hdr-usage></a>
+# Usage
+
+After building all the stuff using `make` (see [Build / Requirements] section above),
+there should be following output files for two general parts:
+
+- Data collection part: `leco-ebpf-load` + `leco-event-pipe` + `leco.service`
+
+    Install `leco.service` to `/etc/systemd/system` and enable/start it with systemd,
+    adjusting paths of those binaries there as-needed.
+
+    Or, alternatively, e.g. for manual testing, these can be (re-)started
+    separately from terminal via following commands:
+
+    ```
+    ./leco-ebpf-load -p /sys/fs/bpf/leco -v
+    ./leco-event-pipe -p /sys/fs/bpf/leco -f events.fifo
+    ```
+
+    Both should require root access when started this way - use `leco.service`
+    with systemd `FDStore=` mechanism to avoid that, or maybe `chown` on persistent
+    `/sys/fs/bpf/leco` bpf-pins path that loader binary creates.
+
+    `rm -rf /sys/fs/bpf/leco` can be used to cleanup those loaded eBPFs afterwards.\
+    `cat events.fifo` to see all captured connection information/events.\
+    `bpftool map dump pinned /sys/fs/bpf/leco/maps/...` to check on eBPF data manually.
+
+- Visualization part: `leco-sdl-widget` + `leco-sdl-widget.ini`
+
+    Tweak `leco-sdl-widget.ini` configuration file as-needed, though it should
+    work fine with all defaults.
+
+    Run `./leco-sdl-widget`, or `leco-sdl-widget leco-sdl-widget.ini` to use
+    edited config file - by default this should create a transparent borderless
+    window (kinda similar to well-known [conky] desktop monitoring tool),
+    either displaying network connection info lines, or blank until it can connect
+    to specified fifo pipe (created by `leco-event-pipe` component above).
+
+Both parts can be started/stopped separately anytime, widget uses inotify
+to wait for fifo pipe to be created if there isn't one already.
+
+There's nothing interactive here - widget just stays where it's configured
+to be and displays whatever is captured by ebpf hooks, filtering/grouping
+connection lines as per `[rx-proc]` and `[rx-group]` sections in the ini file.
+
+
+<a name=hdr-regular_expressions_in_rx-_sections></a>
+## Regular expressions in \[rx-\*\] sections
+
+Those regexps process "line" keys which can be seen if you e.g.
+run `cat /run/user/1000/leco.fifo` or widget with `-d/--debug` option
+(or `debug = yes` set in the ini config file).
+
+`leco-sdl-widget.ini` produced by `make` or its source [widget.ini file]
+should have a bunch of examples of such regexp replacement/grouping rules
+and more description in the comments above.\
+They can look like this (with `# ...` inline comments at the end):
+
+``` ini
+[rx-proc]
+^(\s*\S+ ::) myuser :: = $1 # only keep usernames other than default local user
+\ 53/udp :: = \ DNS :: # nicer name for a common port
+\ \[tmux-spawn-\S+\] :: = \ [tmux] :: # shorten long cgroup names
+```
+
+So, for example, connection-info line from fifo like this:
+```
+18:32 :: myuser :: drill [tmux-spawn-822f3728+] :: 10.2.0.1 53/udp :: v 58B / 26B ^
+```
+
+Will be changed by those regexps to this: `18:32 :: drill [tmux] :: 10.2.0.1 DNS :: v 58B / 26B ^`
+
+Regular expression syntax is [PCRE]. Put that line above as "test string" into
+e.g. [regex101.com], along with regexp keys like `^(\s*\S+ ::) myuser ::`
+(as "regular expression" above) to see how it all works and make new rules like that.
+
+Regexps configured in the ini file can be tested against any line using tool's `-r/--rx-test`
+option - e.g. `./leco-sdl-widget leco-sdl-widget.ini -r '18:32 :: myuser :: ...'` - which
+will print how that exact line should be replaced or grouped, if anything matches it.
+
+Often apps like web browsers tend to make a lot of connections, which might not
+be that interesting or relevant, and using `` g`... `` replacements in `[rx-proc]`
+section or `[rx-group]` matches can be used to group all those into one output slot/line.
+
+Regexps can also be messy to match multiple things anywhere on the line, or to say
+"replace if this doesn't match", so config file also supports stringing multiple ones
+together (with AND logic), for example: `/match this/ && /and that/ && ~/but not this/`.
+
+`/.../` wrapper around regexps can also be used with flags, e.g. `I/.../` for
+case-sensitive matches (default is case-insensitive), and in addition to `` g`... ``
+"group under replacement key" substitution values can also have index of regexp
+in the chain to replace, e.g. `` 1`with this `` to replace `/match this/` in example above
+(instead of last matched non-negative regexp, which is the default).
+
+There's usually no need to bother with all this complicated extra syntax though -
+just `<regexp> = <replacement>` PCREs should be enough for most cases.
+
+[widget.ini file]: widget.ini
+[PCRE]: https://en.wikipedia.org/wiki/Perl_Compatible_Regular_Expressions
+[regex101.com]: https://regex101.com/
+
+
 <a name=hdr-known_limitations_and_things_to_improve_later></a>
-## Known limitations and things to improve later
+# Known limitations and things to improve later
 
 - Finish implementing all the stuff planned from the start.
 
-    - conf: add syntax for splitting long lines - useful for curve points.
-    - conf.rx: some syntax for group+replace regexps, as those commonly repeat.
+    - pipe: add option for including a local socket part, can be stripped by regexp.
     - pipe: rate-limit updates, in addition to rate-limit in ebpf.
     - pipe: don't send backlog info on dead pids to new clients (optional).
+    - pipe: detect/replace non-useful interpreter binaries in comm field from /proc.
+    - widget: detect kb-input-capture events, release kb from those.
     - Additional fade curve for lingering connections, with timeout, setting cap on alpha.
     - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
     - Check how firewalled conns get handled, make those visually distinctive.

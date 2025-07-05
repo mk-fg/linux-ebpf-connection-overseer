@@ -4,11 +4,17 @@
 # Final build: nim c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget widget.nim
 # Usage info: ./leco-sdl-widget -h
 
-import std/[ strutils, strformat, parseopt, math, macros,
-	os, osproc, monotimes, logging, re, tables, sets, heapqueue ]
+import std/[ strutils, strformat, parseopt, bitops, endians, math,
+	macros, os, osproc, monotimes, logging, re, tables, sets, heapqueue ]
 import std/[ typedthreads, locks, posix, inotify, json, base64 ]
 import nsdl3 as sdl
 
+
+type RX = object
+	rx: Regex
+	sub: string
+	flags: int
+	ex: ref RX
 
 type Conf = ref object
 	win_title = "LECO Network-Monitor Widget"
@@ -30,11 +36,11 @@ type Conf = ref object
 	line_fade_curve = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
 	color_bg = Color(r:0, g:0x0c, b:0, a:0x66)
 	color_fg = Color(r:0xff, g:0xff, b:0xff, a:0xff)
-	run_fifo = ""
+	run_fifo = "/run/user/1000/leco.fifo"
 	run_fifo_buff_sz = 200
 	run_debug = false
-	rx_proc: seq[(Regex, string)]
-	rx_group: seq[(Regex, string)]
+	rx_proc: seq[RX]
+	rx_group: seq[RX]
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
 
@@ -65,7 +71,6 @@ proc ts_bspline_sample( spline: ptr tsBSpline, num: csize_t,
 proc c_free(mem: pointer) {.header:"<stdlib.h>", importc:"free", nodecl.}
 
 
-import std/[ bitops, endians ]
 func siphash(data: string, key="leco-sdl-widget1", C=2, D=4): string =
 	## SipHash-2-4 with 64b/8B output, from/to strings.
 	assert key.len == 16
@@ -120,6 +125,86 @@ proc sdl_update_check(ts: int64 = -1): bool {.inline.} =
 	## Check for whether window update/render is needed since ts.
 	let ts = if ts < 0: get_mono_time().ticks else: ts
 	with_lock sdl_upd_lock: return ts <= sdl_upd_ns
+
+
+{.push base.} # see base RX object structure above - used in config
+
+type RXRepl = tuple
+	check: bool # regexp match or negated no-match
+	s: string
+	repl: bool # whether replacement was made
+	group: bool
+	group_key: string
+
+const
+	rx_wrap = 0 # was in "<flags>/<regexp>/" format
+	rx_neg = 1
+	rx_group = 2
+	rx_result = 3
+
+method check(o: RX, s: string): bool {.gcsafe.} =
+	## Return whether string matches this RX-chain.
+	if o.flags.test_bit(rx_neg) xor (s.find(o.rx) != -1):
+		return if o.ex == nil: true else: o.ex[].check(s)
+
+method replace(o: RX, s: string): RXRepl {.gcsafe.} =
+	## Same as rx.check() but returns match-replacement and grouping info.
+	var n = 0; var caps: array[re.MaxSubpatterns, string]
+	while n < s.len:
+		let m = s.findBounds(o.rx, caps, n)
+		if n == 0: # first iteration
+			let neg = o.flags.test_bit(rx_neg)
+			result.check = neg xor (m.first >= 0)
+			if result.check and o.ex != nil:
+				result = o.ex[].replace(s)
+				if result.repl: return # last replacement from chain is used
+			result.repl = not neg and o.flags.test_bit(rx_result)
+			if not result.check: return # can be changed from o.ex
+			if result.repl: result.group = o.flags.test_bit(rx_group)
+		if not result.repl: return elif m.first < 0: break
+		let ext = o.sub % caps
+		result.s.add s.substr(n, m.first-1); result.s.add ext
+		if result.group: result.group_key.add ext
+		if m.last + 1 == n: break else: n = m.last + 1
+	result.s.add s.substr(n)
+
+method rx_set(o: var RX, s: string, rflags: int, caps: var open_array[string]) =
+	var re_flags = {re_study, re_ignore_case}
+	o.flags.set_mask rflags
+	if not s.match(re"^([~iI]+)?/(.+)/$", caps): o.rx = re(s, re_flags); return
+	var flags = 2^rx_wrap
+	if caps[0].contains('i'): re_flags.incl re_ignore_case
+	if caps[0].contains('I'): re_flags.excl re_ignore_case
+	if caps[0].contains('~'): flags.set_bit rx_neg
+	o.rx = re(caps[1], re_flags); o.flags.set_mask flags
+
+{.pop.}
+
+proc rx_parse(s: string, sub = "", sub_n = -1, flags = 0): RX =
+	## Return RX regexp-chain object to match/replace/group strings by.
+	var rsub = sub; var rsub_n = sub_n; var rflags = flags
+	var caps: array[re.MaxSubpatterns, string]
+	if rflags == 0 and rsub.match(re"^(g?([1-9])?g?)`(.+)$", caps):
+		if caps[0].contains('g'): rflags.set_bit rx_group
+		if caps[1] != "": rsub_n = caps[1].parse_int
+		rsub = caps[2]
+	if rsub_n == 1 or rsub_n < 0: # 0 propagates after replacement is found
+		result.sub = rsub; result.flags.set_bit rx_result
+		if rsub_n == 1: rsub_n = 0
+	if rsub_n != 0: rsub_n -= 1
+	let m = s.findBounds(re"\s+&&(\s+|$)", caps)
+	try:
+		if m.first == -1: raise RegexError.new_exception("not &&-chain")
+		result.rx_set(s[0 ..< m.first], rflags, caps)
+		if not result.flags.test_bit(rx_wrap):
+			if rflags.test_bit(rx_wrap): raise ValueError.new_exception(
+				&"Missing /.../ wrapping in element on rx &&-chain [ {s} ]" )
+			raise RegexError.new_exception("no wrapping for &&-chain")
+	except RegexError: result.rx_set(s, rflags, caps); return
+	rflags.set_bit rx_wrap; result.flags.set_mask rflags
+	if m.last == s.len - 1: return # strip operator at the end
+	result.ex = new RX
+	result.ex[] = rx_parse(s.substr(m.last+1), rsub, rsub_n, rflags)
 
 
 proc parse_conf_file(conf_path: string): Conf =
@@ -177,7 +262,6 @@ proc parse_conf_file(conf_path: string): Conf =
 		if line =~ re_comm: continue
 		elif line =~ re_name: name = matches[0]
 		elif line =~ re_var:
-			# XXX: only need key0 for regexps, which should be formatted differently anyway
 			key0 = matches[0]; key = key0.replace("_", "-"); val = matches[2]
 			while line_n < lines.len: # add-up continuation lines
 				let line_cont = lines[line_n]
@@ -229,13 +313,10 @@ proc parse_conf_file(conf_path: string): Conf =
 				else: section_val_unknown
 
 			if name == "rx-proc" or name == "rx-group":
-				var re_flags = {re_study, re_ignore_case}
-				if key0.startswith("i:"): key0 = key0.substr(2)
-				elif key0.startswith("I:"): key0 = key0.substr(2); re_flags.excl(re_ignore_case)
 				if val.startswith("\\ "): val = val.substr(1)
 				if val.endswith(" \\"): val = val[0 .. ^2]
-				let t = (re(key0, re_flags), val); key = ""
-				if name == "rx-proc": conf.rx_proc.add t else: conf.rx_group.add t
+				let rx = rx_parse(key0, val); key = ""
+				if name == "rx-proc": conf.rx_proc.add rx else: conf.rx_group.add rx
 
 			if key != "": log_warn( "Unrecognized config" &
 				&" section [{name}] for '{key}' value on line {line_n} :: {line}" )
@@ -262,18 +343,22 @@ var # updated from fifo-conn-reader thread to use by NetConns
 	conn_buff: ConnInfoBuffer
 	conn_buff_lock: Lock
 
-proc sub(rx: Regex, by: string, s: string): tuple[match: bool, s: string] =
-  ## Similar to re.replacef, but also returns whether regexp matched anything.
-  var pos = 0; var caps: array[re.MaxSubpatterns, string]
-	while pos < s.len:
-		let m = s.findBounds(rx, caps, pos)
-		if m.first < 0: break
-		result.match = true
-		result.s.add s.substr(pos, m.first-1)
-		result.s.addf(by, caps)
-		if m.last + 1 == pos: break
-		pos = m.last + 1
-	result.s.add s.substr(pos)
+proc conn_reader_rx_repl( conn: var ConnInfo,
+		rx_group: seq[RX], rx_proc: seq[RX] ): bool {.gcsafe.} =
+	var rr: RXRepl
+	for rx in rx_group:
+		rr = rx.replace(conn.line)
+		if not rr.check: continue
+		if rr.s == "": return # empty group = drop line
+		conn.group = rr.s
+	for rx in rx_proc:
+		rr = rx.replace(conn.line)
+		if not rr.check: continue
+		if rr.repl: conn.line = rr.s
+		if rr.group and conn.group == "":
+			if rr.group_key == "": return # empty group = drop line
+			conn.group = rr.group_key
+	return true
 
 proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 	## Daemon thread that populates conn_buff.
@@ -318,14 +403,7 @@ proc conn_reader(conf: Conf) {.thread, gcsafe.} =
 			except ValueError as e:
 				log_error(&"fifo: failed to decode event :: {e.msg} :: [ {ev} ]")
 				continue
-			var res: tuple[match: bool, s: string]
-			for (rx, tpl) in conf.rx_group:
-				res = rx.sub(tpl, conn.line)
-				if not res.match: continue
-				if res.s != "": conn.group = res.s
-				break
-			if res.match and res.s == "": continue # empty group = drop line
-			for (rx, tpl) in conf.rx_proc: conn.line = conn.line.replacef(rx, tpl)
+			if not conn_reader_rx_repl(conn, conf.rx_group, conf.rx_proc): continue
 			with_lock conn_buff_lock:
 				conn_buff.buff[conn_buff.n] = conn
 				if conn_buff.m < conf.run_fifo_buff_sz: conn_buff.m += 1
@@ -595,6 +673,13 @@ proc main_help(err="") =
 				Can be initially missing/inaccessible, tool will wait for it.
 				Must be specified either in configuration file, or with this option.
 
+			-r/--rx-test <line>
+				Test configured regexp-filtering against specified line and exit.
+				Will print how/whether line will be grouped or changed by [rx-*] config sections.
+				Intended to check whether regexps apply correctly after changes,
+					on lines obtained from leco-event-pipe script fifo, either by simple
+					cat/less tools or picked from -d/--debug output of this tool.
+
 			-d/--debug - enable verbose logging to stderr, incl. during config file loading.
 		""")
 	quit 0
@@ -604,6 +689,7 @@ proc main(argv: seq[string]) =
 		conf = Conf()
 		opt_conf_file = ""
 		opt_fifo_path = ""
+		opt_rx_test = ""
 		opt_debug = false
 
 	block cli_parser:
@@ -615,6 +701,7 @@ proc main(argv: seq[string]) =
 			main_help &"{opt_fmt(opt_last)} option unrecognized or requires a value"
 		proc opt_set(k: string, v: string) =
 			if k in ["f", "fifo"]: opt_fifo_path = v
+			if k in ["r", "rx-test"]: opt_rx_test = v
 			else: main_help &"Unrecognized option [ {opt_fmt(k)} = {v} ]"
 		for t, opt, val in getopt(argv):
 			case t
@@ -634,9 +721,21 @@ proc main(argv: seq[string]) =
 	if opt_conf_file != "": conf = parse_conf_file(opt_conf_file)
 	if opt_debug and not conf.run_debug: conf.run_debug = true
 	elif conf.run_debug and not opt_debug: log_init(conf.run_debug)
-	if opt_fifo_path != "": conf.run_fifo = opt_fifo_path
-	if conf.run_fifo == "": main_help "Input FIFO path must be set via config/option"
 	if conf.line_h == 0: conf.line_h = int(conf.font_h.float * 1.5)
+	if opt_fifo_path != "": conf.run_fifo = opt_fifo_path
+
+	if opt_rx_test != "":
+		var conn: ConnInfo
+		conn.line = opt_rx_test
+		let pass = conn_reader_rx_repl(conn, conf.rx_group, conf.rx_proc)
+		echo "Regexp rules filtering test:"
+		echo &"  original line : {opt_rx_test}"
+		let changed = opt_rx_test != conn.line; let grouped = conn.group != ""
+		if changed: echo &"  resulting line: {conn.line}"
+		echo &"  info: changed={changed} discarded={not pass} grouped={grouped}"
+		if grouped: echo &"  group key: [ {conn.group} ]"
+		return
+	if conf.run_fifo == "": main_help "Input FIFO path must be set via config/option"
 
 	if conf.font_file == "":
 		let fc_lookup = "sans:lang=en"
