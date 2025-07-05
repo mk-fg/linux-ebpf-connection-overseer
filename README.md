@@ -40,6 +40,10 @@ Repository URLs:
 [Known limitations and things to improve later]:
   #hdr-known_limitations_and_things_to_improve_later
 
+How it roughly looks on a second screen here (as of 2025-07-06):
+
+<video src="https://github.com/user-attachments/assets/cd74e484-291e-4798-bddb-8f0afb59c957" width="620" height="400" controls loop></video>
+
 
 <a name=hdr-technical_details></a>
 # Technical details
