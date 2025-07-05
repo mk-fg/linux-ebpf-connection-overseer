@@ -228,7 +228,7 @@ section or `[rx-group]` matches can be used to group all those into one output s
 
 Regexps can also be messy to match multiple things anywhere on the line, or to say
 "replace if this doesn't match", so config file also supports stringing multiple ones
-together (with AND logic), for example: `/match this/ && /and that/ && ~/but not this/`.
+together (with AND logic), for example: `/match this/ && /and that/ && !/but not this/`.
 
 `/.../` wrapper around regexps can also be used with flags, e.g. `I/.../` for
 case-sensitive matches (default is case-insensitive), and in addition to `` g`... ``

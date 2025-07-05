@@ -171,11 +171,11 @@ method replace(o: RX, s: string): RXRepl {.gcsafe.} =
 method rx_set(o: var RX, s: string, rflags: int, caps: var open_array[string]) =
 	var re_flags = {re_study, re_ignore_case}
 	o.flags.set_mask rflags
-	if not s.match(re"^([~iI]+)?/(.+)/$", caps): o.rx = re(s, re_flags); return
+	if not s.match(re"^([!iI]+)?/(.+)/$", caps): o.rx = re(s, re_flags); return
 	var flags = 2^rx_wrap
 	if caps[0].contains('i'): re_flags.incl re_ignore_case
 	if caps[0].contains('I'): re_flags.excl re_ignore_case
-	if caps[0].contains('~'): flags.set_bit rx_neg
+	if caps[0].contains('!'): flags.set_bit rx_neg
 	o.rx = re(caps[1], re_flags); o.flags.set_mask flags
 
 {.pop.}
