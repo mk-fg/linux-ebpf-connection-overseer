@@ -289,13 +289,13 @@ prefix to set min/max for y, so that e.g. last "994,11" point in example above i
     - pipe: don't send backlog info on dead pids to new clients (optional).
     - pipe: detect/replace non-useful interpreter binaries in comm field from /proc.
     - widget: detect kb-input-capture events, release kb from those.
-    - Additional fade curve for lingering connections, with timeout, setting cap on alpha.
-    - Clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
-    - Check how firewalled conns get handled, make those visually distinctive.
-    - Nicer text with an outline.
-    - Effects for new/faded connections added back to the list (glow/blur, slide, etc).
-    - Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
-    - Some screenshot and ascii diagram of components in this README.
+    - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
+    - meta: clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
+    - ebpf: check how firewalled conns get handled, make those visually distinctive.
+    - widget: nicer text with an outline.
+    - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
+    - pipe: fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
+    - docs: some screenshot/video and ascii diagram of components in this README.
 
 - Send events from pipe to multiple receivers.
 
