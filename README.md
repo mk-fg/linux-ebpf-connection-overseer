@@ -11,7 +11,7 @@ with relatively clean and useful info, incl. systemd cgroups and processes
 filtered/grouped as-needed by configurable regexps, to easily spot anything
 new, odd or unexpected.
 
-Table of Contents
+Table of Contents:
 
 - [Technical details](#hdr-technical_details)
 
@@ -20,6 +20,7 @@ Table of Contents
 - [Usage](#hdr-usage)
 
     - [Regular expressions in \[rx-\*\] sections]
+    - [line-fade-curve spline editor]
 
 - [Known limitations and things to improve later]
 
@@ -35,6 +36,7 @@ Repository URLs:
 [Build / Requirements]: #hdr-build___requirements
 [Regular expressions in \[rx-\*\] sections]:
   #hdr-regular_expressions_in_rx-_sections
+[line-fade-curve spline editor]: #hdr-line-fade-curve_spline_editor
 [Known limitations and things to improve later]:
   #hdr-known_limitations_and_things_to_improve_later
 
@@ -183,6 +185,8 @@ There's nothing interactive here - widget just stays where it's configured
 to be and displays whatever is captured by ebpf hooks, filtering/grouping
 connection lines as per `[rx-proc]` and `[rx-group]` sections in the ini file.
 
+More specific features and configuration options are described in more detail below.
+
 
 <a name=hdr-regular_expressions_in_rx-_sections></a>
 ## Regular expressions in \[rx-\*\] sections
@@ -238,6 +242,41 @@ just `<regexp> = <replacement>` PCREs should be enough for most cases.
 [widget.ini file]: widget.ini
 [PCRE]: https://en.wikipedia.org/wiki/Perl_Compatible_Regular_Expressions
 [regex101.com]: https://regex101.com/
+
+
+<a name=hdr-line-fade-curve_spline_editor></a>
+## line-fade-curve spline editor
+
+Connection info lines can be configured to fade-in and fade-out, and generally change
+opacity over time since last activity, for a period configured by `line-fade-time`.
+
+`line-fade-curve` parameter allows to set any number of (relative-time, opacity) points,
+which are then connected by a smooth cardinal cubic curve, and transparency of info text
+follows that curve over `line-fade-time` number of seconds.
+
+[spline-editor.html] file in this repository is a simple editor for such curves,
+which allows to visually add any number of points, move them around and see connecting
+curve with values interpolated in-between those points.
+Open in a browser (as in Ctrl-O) to use it.
+
+E.g. a curve like this from [widget.ini file] example:
+``` ini
+line-fade-curve = range=0:100 0,41 2,62 4,80 6,94 18,98 58,100 97,84 161,67
+  270,63 340,60 395,48 560,46 645,45 715,43 774,31 834,27 902,24 953,17 994,11
+```
+
+Will quickly fade-in new connection infos, and then fade those out in roughly 3 steps,
+down to 11% opacity at the end, so that it'd be apparent at a glance which connections
+are new, which are slightly older, which haven't seen activity for a couple minutes,
+and which have faded into irrelevance by now.
+
+`leco-sdl-widget.ini` ([widget.ini]) has more description of how that value works,
+but it's just a list of "x,y" points to build a curve in-between, with optional "range="
+prefix to set min/max for y, so that e.g. last "994,11" point in example above is read as
+11% instead of 0% opacity, with range (and 0%) set from highest/lowest values by default.
+
+[spline-editor.html]: spline-editor.html
+[widget.ini]: widget.ini
 
 
 <a name=hdr-known_limitations_and_things_to_improve_later></a>
