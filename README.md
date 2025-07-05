@@ -1,15 +1,17 @@
 Linux eBPF Connection Overseer
 ==============================
 
-Network monitoring tool intended to export or display info about
-any network connections, with associated process/cgroup information,
-as well as traffic counters on those, in a way similar to [conky] tool.
+Network monitoring tool to display info about new/active connections on linux desktop,
+with enough associated process/cgroup information to easily tell what those might
+be from/about, as well as some traffic counters, in a way similar to [conky] tool
+(i.e. over desktop background or in a transparent overlay window).
 
-Idea is to have a minimally intrusive non-interactive overlay window into
-network access attempts of/to various local apps on a second monitor somewhere,
-with relatively clean and useful info, incl. systemd cgroups and processes
-filtered/grouped as-needed by configurable regexps, to easily spot anything
-new, odd or unexpected.
+Focus is to be useful in the same way conky is - be able to check what's going on
+at a glance, easily spotting something new or unusual, with enough configurability
+to remove or filter-out any system-specific irrelevant noise.
+
+Uses system-wide eBPF hooks to gather all information in an efficient way and
+also presents it via SDL3 in a fairly direct way, without any extra abstractions.
 
 Table of Contents:
 
@@ -115,7 +117,7 @@ More specifically:
 
     Run `git submodule init && git submodule update` first to fetch
     libbpf/bpftool build-dependencies. `make leco-ebpf-load` command
-    can be used to build only this `leco-ebpf-load` eBPF-loader binary.
+    can be used to build only this `leco-ebpf-load` eBPF-loader binary (~350K).
 
 - [leco-event-pipe] script requires [python] (with ctypes) and [libbpf] installed,
   uses fds/pins created by `leco-ebpf-load`, that should be ran before it.
@@ -128,7 +130,7 @@ More specifically:
 
     `git submodule init && git submodule update` needs to be run first
     to fetch tinyspline build-time dependency library.\
-    Can be built separately using `make leco-sdl-widget` command.
+    Can be built separately using `make leco-sdl-widget` command (~400K binary).
 
 Running `make` without parameters includes building all these components.
 
@@ -188,6 +190,10 @@ to wait for fifo pipe to be created if there isn't one already.
 There's nothing interactive here - widget just stays where it's configured
 to be and displays whatever is captured by ebpf hooks, filtering/grouping
 connection lines as per `[rx-proc]` and `[rx-group]` sections in the ini file.
+
+Should use modest cpu/mem amounts (~0.2% / 60M for sdl app here, less than conky),
+not add any significant kernel overhead (very basic "put value into LRU cache" hooks),
+and intended to run indefinitely as a desktop overlay or background widget.
 
 More specific features and configuration options are described in more detail below.
 
@@ -299,7 +305,6 @@ prefix to set min/max for y, so that e.g. last "994,11" point in example above i
     - widget: nicer text with an outline.
     - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
     - pipe: fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
-    - docs: some screenshot/video and ascii diagram of components in this README.
 
 - Send events from pipe to multiple receivers.
 
