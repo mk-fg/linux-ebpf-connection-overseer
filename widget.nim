@@ -27,6 +27,7 @@ type Conf = ref object
 	win_upd_ns: int64
 	win_flags = sdl.WINDOW_RESIZABLE or sdl.WINDOW_NOT_FOCUSABLE or
 		sdl.WINDOW_BORDERLESS or sdl.WINDOW_TRANSPARENT or sdl.WINDOW_UTILITY
+	win_hints: Table[HintName, string]
 	font_file = ""
 	font_h = 14
 	line_h = 0 # to be calculated
@@ -44,14 +45,18 @@ type Conf = ref object
 	app_version = "0.1"
 	app_id = "net.fraggod.leco.widget"
 
-var conf_win_flags: Table[string, WindowFlags] # populated at compile-time
-macro conf_win_flags_table_init(names: string): untyped =
+var # populated at compile-time here
+	conf_win_flags: Table[string, WindowFlags]
+	conf_win_hints: Table[string, HintName]
+macro table_consts(table: untyped, prefix: string, names: string): untyped =
 	result = new_nim_node nnk_stmt_list
 	for k in names.str_val.split:
-		let c = ident("WINDOW_" & k.to_upper_ascii)
-		result.add(quote do: conf_win_flags[`k`] = `c`)
-conf_win_flags_table_init( "resizable borderless transparent" &
-	" utility always_on_top fullscreen minimized maximized not_focusable" )
+		let c = ident(prefix.str_val.to_upper_ascii & k.to_upper_ascii)
+		result.add(quote do: `table`[`k`] = `c`)
+table_consts( conf_win_flags, "window_", "resizable borderless utility" &
+	" transparent always_on_top fullscreen minimized maximized not_focusable" )
+conf_win_hints["override_redirect"] = sdl.HINT_X11_FORCE_OVERRIDE_REDIRECT
+table_consts(conf_win_hints, "hint_window_activate_when_", "raised shown")
 
 
 {.passl: "-lm"}
@@ -251,8 +256,8 @@ proc parse_conf_file(conf_path: string): Conf =
 	template section(sec: string, checks: typed) =
 		if name == sec and key != "":
 			try: checks
-			except ValueError: log_warn( "Failed to parse config" &
-				&" value for '{key}' on line {line_n} under [{name}] :: {line}" )
+			except ValueError as e: log_warn( &"Failed to parse config value for '{key}'" &
+				&" on line {line_n} under [{name}]\n  [ {line} ] - [" & $e.name & "] " & e.msg )
 			key = ""
 	template section_val_unknown = log_warn(
 		&"Ignoring unrecognized config-option line {line_n} under [{name}] :: {line}" )
@@ -286,6 +291,12 @@ proc parse_conf_file(conf_path: string): Conf =
 					conf.win_flags = sdl.WindowFlags 0
 					for flag in val.split:
 						conf.win_flags = conf.win_flags or conf_win_flags[flag]
+				of "hints":
+					for hint in val.split:
+						let hv = hint.split('=', 1)
+						if hv.len != 2: raise ValueError.new_exception(
+							&"Hint is not in hint=value format [ {hint} ]" )
+						conf.win_hints[conf_win_hints[hv[0]]] = hv[1]
 				else: section_val_unknown
 
 			section "text":
@@ -702,7 +713,7 @@ proc main(argv: seq[string]) =
 			main_help &"{opt_fmt(opt_last)} option unrecognized or requires a value"
 		proc opt_set(k: string, v: string) =
 			if k in ["f", "fifo"]: opt_fifo_path = v
-			if k in ["r", "rx-test"]: opt_rx_test = v
+			elif k in ["r", "rx-test"]: opt_rx_test = v
 			else: main_help &"Unrecognized option [ {opt_fmt(k)} = {v} ]"
 		for t, opt, val in getopt(argv):
 			case t
@@ -754,6 +765,7 @@ proc main(argv: seq[string]) =
 	sdl.XTTFInit(); defer: sdl.XTTFQuit()
 	sdl.SetAppMetadata(conf.win_title, conf.app_version, conf.app_id)
 	sdl.EnableScreenSaver() # gets disabled by default
+	for hint, val in conf.win_hints.pairs: sdl.SetHint(hint, val)
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
 		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or conf.win_flags )

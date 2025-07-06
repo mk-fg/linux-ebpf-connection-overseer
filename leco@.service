@@ -1,4 +1,5 @@
-# Should be enabled with uid of a desktop user (typically 1000): system enable leco@1000
+# Should be enabled/started with uid of a desktop user (typically 1000)
+#   as an instance value (after @), for example: system enable leco@1000
 # Uses fifo socket in XDG_RUNTIME_DIR - /run/user/<uid>/leco.fifo
 
 [Unit]

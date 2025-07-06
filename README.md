@@ -10,8 +10,8 @@ Focus is to be useful in the same way conky is - be able to check what's going o
 at a glance, easily spotting something new or unusual, with enough configurability
 to remove or filter-out any system-specific irrelevant noise.
 
-Uses system-wide eBPF hooks to gather all information in an efficient way and
-also presents it via SDL3 in a fairly direct way, without any extra abstractions.
+Uses system-wide eBPF hooks to gather connection/traffic data in-kernel efficiently,
+and also presents it via SDL3 in a fairly direct way, without any extra abstractions.
 
 Table of Contents:
 
@@ -316,19 +316,26 @@ until rx+tx traffic crosses basic 5K threshold.
 <a name=hdr-known_limitations_and_things_to_improve_later></a>
 # Known limitations and things to improve later
 
-- Finish implementing all the stuff planned from the start.
+It's working fine for me as it is, but there's always plenty of room for improvement.
+
+- Unfinished and minor stuff.
 
     - pipe: add option for including a local socket part, can be stripped by regexp.
     - pipe: rate-limit updates, in addition to rate-limit in ebpf.
     - pipe: don't send backlog info on dead pids to new clients (optional).
-    - pipe: detect/replace non-useful interpreter binaries in comm field from /proc.
-    - widget: detect kb-input-capture events, release kb from those.
-    - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
-    - meta: clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
+    - pipe: auto-detect/replace non-useful interpreter names like "python3" from /proc.
     - ebpf: check how firewalled conns get handled, make those visually distinctive.
-    - widget: nicer text with an outline.
+    - ebpf: add udp sendmsg kprobe to set/update raddr in unconnected udp sockets.
+    - ebpf: add handling for more ipproto variants - sctp and few others like that.
+    - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
+    - widget: nicer text with a halo/outline.
     - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
-    - pipe: fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
+    - meta: clear distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
+
+- Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
+
+    Idea is to reverse-query local unbound cache to return name that it last
+    returned for IP, which should work for all local apps, incl. ones using DoH.
 
 - Send events from pipe to multiple receivers.
 
@@ -339,6 +346,13 @@ until rx+tx traffic crosses basic 5K threshold.
 
     Currently can be done by running socat from fifo to socket and back to fifo,
     but should be easy enough to support in the python script and widget too.
+
+- Maybe track wireguard tunnel connections.
+
+    Kprobes for those were in earlier eBPF code, but removed in 724adb5
+    in favor of much simpler tracepoints for everything.
+    Doesn't seem very useful to track those though, as it's mostly noise -
+    app connections over those tunnels are interesting and are tracked already.
 
 
 <a name=hdr-links></a>
