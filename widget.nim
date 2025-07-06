@@ -737,6 +737,7 @@ proc main(argv: seq[string]) =
 		if grouped: echo &"  group key: [ {conn.group} ]"
 		return
 	if conf.run_fifo == "": main_help "Input FIFO path must be set via config/option"
+	conf.run_fifo = conf.run_fifo.expand_tilde()
 
 	if conf.font_file == "":
 		let fc_lookup = "sans:lang=en"
@@ -744,7 +745,7 @@ proc main(argv: seq[string]) =
 			&" to find one via 'fc-match {fc_lookup}' command (fontconfig)" )
 		conf.font_file = exec_process( "fc-match",
 			args=["-f", "%{file}", fc_lookup], options={po_use_path} ).strip
-	else: conf.font_file = conf.font_file.expandTilde()
+	else: conf.font_file = conf.font_file.expand_tilde()
 
 	if not (sdl.open_sdl3_library() and sdl.open_sdl3_ttf_library()):
 		raise SDLError.new_exception("Failed to open sdl3/sdl3_ttf libs")
