@@ -655,11 +655,12 @@ proc main_help(err="") =
 	if err != "": print &"ERROR: {err}"
 	print &"\nUsage: {app} [options] <config.ini>"
 	if err != "": print &"Run '{app} --help' for more information"; quit 1
+	let conf = Conf() # for defaults
 	print dedent(&"""
 
 		Graphical SDL3 UI tool, to read network information/events
 			from leco-event-pipe output fifo socket, and render those
-			as fading text lines to a semi-transparent desktop window.
+			as fading text lines to a semi-transparent desktop window/overlay.
 		Intended to run indefinitely as a desktop network-monitoring widget.
 		Options specified on the command line override ones in the ini configuration file.
 
@@ -670,8 +671,8 @@ proc main_help(err="") =
 
 			-f/--fifo <path>
 				Path to an input FIFO socket, used by leco-event-pipe script for its output.
-				Can be initially missing/inaccessible, tool will wait for it.
-				Must be specified either in configuration file, or with this option.
+				Make sure it has strict access permissions to only allow this tool.
+				Will wait for it to be created/accessible. Default: {conf.run_fifo}
 
 			-r/--rx-test <line>
 				Test configured regexp-filtering against specified line and exit.

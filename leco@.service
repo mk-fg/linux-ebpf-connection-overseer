@@ -1,0 +1,52 @@
+# Should be enabled with uid of a desktop user (typically 1000): system enable leco@1000
+# Uses fifo socket in XDG_RUNTIME_DIR - /run/user/<uid>/leco.fifo
+
+[Unit]
+Wants=network-pre.target leco-fifo@%i.service
+Before=network-pre.target network.target
+After=leco-fifo@%i.service
+
+[Service]
+Type=notify
+NotifyAccess=exec
+FileDescriptorStoreMax=32
+
+BindPaths=/run/user/%i/leco.fifo:/run/leco.fifo
+
+# ExecStartPre= has issues tracking fds, so --pin in required here
+# See https://github.com/systemd/systemd/issues/37192 for details
+ExecStartPre=+leco-ebpf-load -p /sys/fs/bpf/leco --pin-fdstore
+ExecStart=leco-event-pipe -f /run/leco.fifo --replay-window 4h
+
+# Generic systemd sandboxing options
+DynamicUser=yes
+ProcSubset=pid
+ProtectProc=invisible
+ProtectHome=yes
+PrivateDevices=yes
+PrivateUsers=yes
+NoNewPrivileges=yes
+SecureBits=noroot-locked
+SystemCallFilter=@system-service bpf
+SystemCallFilter=~ @resources
+SystemCallArchitectures=native
+
+RestrictAddressFamilies=AF_UNIX
+IPAddressDeny=any
+PrivateNetwork=yes
+
+UMask=0077
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+ProtectClock=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectKernelModules=yes
+ProtectHostname=yes
+ProtectKernelTunables=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+CapabilityBoundingSet=
+
+[Install]
+WantedBy=multi-user.target
