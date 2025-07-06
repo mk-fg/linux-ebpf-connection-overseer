@@ -112,7 +112,7 @@ build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspl
 	$(CMAKE) --build build/tinyspline --target install
 
 leco-sdl-widget.ini: widget.ini
-	$(SED) 's/^[^#\\[]/#\0/' $< > $@
+	$(SED) 's/^[^#[]/#\0/' $< > $@
 
 leco-sdl-widget: widget.nim build/tinyspline/lib64/libtinyspline.a build/tinyspline/include/tinyspline.h
 	$(NIM) c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget $<

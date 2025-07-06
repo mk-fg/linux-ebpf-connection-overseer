@@ -65,11 +65,11 @@ Consists of several components:
 
 - Unprivileged [leco-event-pipe] system-daemon python script that uses eBPF map
   file descriptors (passed to it) to monitor network connection events, augment,
-  filter and export those to some fifo socket/pipe as json lines.
+  filter, string-format and export those to some fifo socket/pipe as json lines.
 
     [leco.service] systemd unit file can be used to run loader binary and start this script.
 
-- Desktop session [leco-sdl-widget] to read event info and visualize in a relatively simple way.
+- Desktop session [leco-sdl-widget] to read event info and visualize it in a relatively simple way.
 
 It's kinda similar to [OpenSnitch] and [netatop-bpf] projects (and is partly based
 on those), with simple non-interactive read-only scope, [conky]-like transparent
@@ -299,7 +299,7 @@ Done for efficiency reasons - traffic update events are rate-limited to one in 3
 that close within seconds won't really get counted properly.
 
 It doesn't seem to be useful to count couple KiB on those anyway,
-so traffic counters on those just aren't displayed to have less visual noise,
+so traffic counters just aren't displayed there to have less visual noise,
 until rx+tx traffic crosses basic 5K threshold.
 
 [ebpf.c]: ebpf.c

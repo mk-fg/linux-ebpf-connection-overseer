@@ -22,8 +22,8 @@ type Conf = ref object
 	win_oy = 40
 	win_w = 600
 	win_h = 400
-	win_px = 0
-	win_py = 0
+	win_px = 8
+	win_py = 8
 	win_upd_ns: int64
 	win_flags = sdl.WINDOW_RESIZABLE or sdl.WINDOW_NOT_FOCUSABLE or
 		sdl.WINDOW_BORDERLESS or sdl.WINDOW_TRANSPARENT or sdl.WINDOW_UTILITY
@@ -34,7 +34,7 @@ type Conf = ref object
 	line_uid_fmt = "#$1"
 	line_fade_ns: int64 = 60 * 1_000_000_000
 	line_fade_curve = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
-	color_bg = Color(r:0, g:0x0c, b:0, a:0x66)
+	color_bg = Color(r:0, g:0x0c, b:0x08, a:0x66)
 	color_fg = Color(r:0xff, g:0xff, b:0xff, a:0xff)
 	run_fifo = "/run/user/1000/leco.fifo"
 	run_fifo_buff_sz = 200
