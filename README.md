@@ -194,7 +194,7 @@ There's nothing interactive here - widget just stays where it's configured
 to be and displays whatever is captured by ebpf hooks, filtering/grouping
 connection lines as per `[rx-proc]` and `[rx-group]` sections in the ini file.
 
-Should use modest cpu/mem amounts (~0.2% / 60M for sdl app here, less than conky),
+Should use modest cpu/mem amounts (~0.05% / 60M for sdl app here, less than conky),
 not add any significant kernel overhead (very basic "put value into LRU cache" hooks),
 and intended to run indefinitely as a desktop overlay or background widget.
 

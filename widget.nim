@@ -571,8 +571,8 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		if o.rows.contains(conn.ns):
 			r = o.rows[conn.ns]; if r.listed: continue
 			r.listed = true # heap-sorts these last for replacement
-			if conn.ns_trx > r.ns_trx:
-				r.ns_trx = conn.ns_trx; r.line = conn.line; r.ts_update = ts; result.add(r)
+			if conn.ns_trx > r.ns_trx: # updated row
+				r.ns_trx = conn.ns_trx; r.line = conn.line; r.ts_update = ts; result.add r
 			continue
 		conns_new.add(conn)
 	if conns_new.len == 0: return result
@@ -584,9 +584,9 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		elif rows_replace.len != 0: # replace row
 			r = rows_replace.pop; o.rows.del(r.ns); r.replaced = true
 		else: log_debug(&"draw: no slot for new conn {conn}"); continue
-		r.ns = conn.ns; r.ns_trx = r.ns_trx; r.line = conn.line; r.ts_update = ts
+		r.ns = conn.ns; r.ns_trx = conn.ns_trx; r.line = conn.line; r.ts_update = ts
 		(r.uid, r.uid_color) = o.row_uid(conn.ns)
-		o.rows[conn.ns] = r; result.add(r)
+		o.rows[conn.ns] = r; result.add r
 
 method draw(o: var Painter): bool =
 	## Clear/update window contents buffer, returns true if there are any changes.
