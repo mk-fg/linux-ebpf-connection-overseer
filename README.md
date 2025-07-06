@@ -23,6 +23,7 @@ Table of Contents:
 
     - [Regular expressions in \[rx-\*\] sections]
     - [line-fade-curve spline editor]
+    - [Traffic counters aren't always displayed]
 
 - [Known limitations and things to improve later]
 
@@ -39,6 +40,8 @@ Repository URLs:
 [Regular expressions in \[rx-\*\] sections]:
   #hdr-regular_expressions_in_rx-_sections
 [line-fade-curve spline editor]: #hdr-line-fade-curve_spline_editor
+[Traffic counters aren't always displayed]:
+  #hdr-traffic_counters_aren_t_always_displayed
 [Known limitations and things to improve later]:
   #hdr-known_limitations_and_things_to_improve_later
 
@@ -287,6 +290,19 @@ prefix to set min/max for y, so that e.g. last "994,11" point in example above i
 
 [spline-editor.html]: spline-editor.html
 [widget.ini]: widget.ini
+
+<a name=hdr-traffic_counters_aren_t_always_displayed></a>
+## Traffic counters aren't always displayed
+
+Done for efficiency reasons - traffic update events are rate-limited to one in 3s
+(see `CONN_TRX_UPD_NS` constant in [ebpf.c]), so new or quick one-off connections
+that close within seconds won't really get counted properly.
+
+It doesn't seem to be useful to count couple KiB on those anyway,
+so traffic counters on those just aren't displayed to have less visual noise,
+until rx+tx traffic crosses basic 5K threshold.
+
+[ebpf.c]: ebpf.c
 
 
 <a name=hdr-known_limitations_and_things_to_improve_later></a>

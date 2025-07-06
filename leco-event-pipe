@@ -286,7 +286,7 @@ def ev_conv(e, all_data=False, cg_label=None, cache_uid=None, cache_ts=None):
 	if cg_label and (cg := cg_label(e.cg)) and cg != comm: comm = f'{comm} [{cg}]'
 	ev.line = ' :: '.join([ ev_ts, u, comm,
 		f'{e.raddr} {e.rport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
-		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' ])
+		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' if e.rx + e.tx > 5 * 2**10 else '' ])
 	if all_data: ev = dict(e, **ev)
 	return ev
 
