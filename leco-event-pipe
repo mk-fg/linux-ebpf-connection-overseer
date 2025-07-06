@@ -36,30 +36,21 @@ def td_repr( td, units_max=1, units_res=None, fmt=None,
 	res = ' '.join(res)
 	return res if not fmt else fmt.format(res)
 
-def openat2(p, mode='r', _cache=[]):
-	'More flexible open() that avoids symlink-related race-conditions'
-	# Also allows to open for writing without O_CREAT.
-	# Way to validate opened path without disallowing symlinks entirely:
-	#  p = realpath(path); validate_is_acceptable(p); file = openat2(p, no_symlinks)
-	# As of 2022-10-13 glibc has no openat2() wrapper yet, hence syscall here.
-	if not _cache:
-		def _openat2(p, flags, _syscall=ct.CDLL(None, use_errno=True).syscall):
-			args = ct.create_string_buffer(struct.pack(
-				'@QQQ', flags | os.O_NOFOLLOW, 0, res_no_symlinks := 0x04 ))
-			fd = _syscall(437, -100, str(p).encode(), args, 24)
-			if fd < 0: raise OSError(err := ct.get_errno(), os.strerror(err))
-			return fd
-		_cache.append(_openat2)
-	flags = 0
-	if 'r' in mode: flags |= os.O_RDONLY
-	if 'w' in mode: assert not flags; flags |= os.O_WRONLY
-	if '+' in mode: assert not flags; flags |= os.O_RDWR
-	if 'c' in mode: flags |= os.O_CREAT
-	if 'x' in mode: flags |= os.O_EXCL
-	if 't' in mode: flags |= os.O_TRUNC
-	if 'a' in mode: flags |= os.O_APPEND
-	mode = mode.translate(dict.fromkeys(ord(c) for c in 'ct'))
-	return open(_cache[0](p, flags | os.O_CLOEXEC), mode)
+def td_parse(td, _tds = dict(
+		w=7*86400, wk=7*86400, week=7*86400,
+		d=1*86400, day=1*86400, h=3600, hr=3600, hour=3600,
+		m=60, min=60, minute=60, s=1, sec=1, second=1 )):
+	'Parse [[HH:]MM:]SS or e.g. 5h30m and such time-deltas to seconds'
+	if isinstance(td, (int, float)): return td
+	delta, td_re = 0, ( '(?i)^[-+]?' + ''.join( fr'(?P<{k}>\d+{k}s?\s*)?' for k, v in
+		sorted(_tds.items(), key=lambda kv: (kv[1], len(kv[0])), reverse=True) ) + '$' )
+	if not ((m := re.search(td_re, td.strip())) and any(m.groups())):
+		h, m, s = (v.strip(': ') for v in ('::' + td).rsplit(':', 2))
+		return float(s or 0) + float(m or 0) * 60 + float(h or 0) * 3600
+	for k, v in _tds.items():
+		if not m.group(k): continue
+		delta += v * int(''.join(filter(str.isdigit, m.group(k))) or 1)
+	return delta
 
 class TimedCacheDict(cs.UserDict):
 	'dict that has values expire and get removed on timeout'
@@ -341,8 +332,9 @@ def main(argv=None):
 		Top-level path under which all eBPF objects are pinned.
 		This script will only access objects under "map" subdirectory.
 		Typically under /sys/fs/bpf/ mountpoint. Might require privileged access.'''))
-	parser.add_argument('-r', '--replay-window', type=float, metavar='seconds',
-		help='Ignore pre-buffered events older than specified number of seconds.')
+	parser.add_argument('-r', '--replay-window', metavar='delta', help=dd('''
+		Ignore pre-buffered events older than specified time-delta.
+		time-delta values can be a number of seconds, [[HH:]MM:]SS or e.g. 5h30m'''))
 	parser.add_argument('--extra-ev-data', action='store_true',
 		help='Pass through all extra event info for debugging, not just the necessary stuff.')
 	parser.add_argument('--dump-cache', action='store_true',
@@ -376,7 +368,7 @@ def main(argv=None):
 			CgroupMap(cache=TimedCacheDict(4*3600)) as cg_map ):
 		if opts.dump_cache: rb = None
 		stream_kws = dict(
-			cache=cache, rb=rb, replay_limit=opts.replay_window,
+			cache=cache, rb=rb, replay_limit=td_parse(opts.replay_window),
 			ev_proc=ft.partial( ev_conv,
 				all_data=opts.extra_ev_data,
 				cg_label=ft.partial( ev_conv_cg_label,
@@ -385,7 +377,7 @@ def main(argv=None):
 				cache_ts=TimedCacheDict(3600, bump_on_get=False) ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
 		# XXX: support sending to multiple receivers
-		while dst := openat2(opts.fifo, 'w'):
+		while dst := open(os.open(opts.fifo, os.O_WRONLY), 'w'):
 			try: stream_events(dst=dst, **stream_kws)
 			finally:
 				try: dst.close()
