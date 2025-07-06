@@ -55,8 +55,11 @@ macro table_consts(table: untyped, prefix: string, names: string): untyped =
 		result.add(quote do: `table`[`k`] = `c`)
 table_consts( conf_win_flags, "window_", "resizable borderless utility" &
 	" transparent always_on_top fullscreen minimized maximized not_focusable" )
-conf_win_hints["override_redirect"] = sdl.HINT_X11_FORCE_OVERRIDE_REDIRECT
 table_consts(conf_win_hints, "hint_window_activate_when_", "raised shown")
+table_consts(conf_win_hints, "hint_video_", "display_priority wayland_scale_to_display")
+conf_win_hints["override_redirect"] = sdl.HINT_X11_FORCE_OVERRIDE_REDIRECT
+conf_win_hints["vsync"] = sdl.HINT_RENDER_VSYNC
+conf_win_hints["no_signal_handlers"] = sdl.HINT_NO_SIGNAL_HANDLERS
 
 
 {.passl: "-lm"}
@@ -761,11 +764,11 @@ proc main(argv: seq[string]) =
 	if not (sdl.open_sdl3_library() and sdl.open_sdl3_ttf_library()):
 		raise SDLError.new_exception("Failed to open sdl3/sdl3_ttf libs")
 	defer: sdl.close_sdl3_library(); sdl.close_sdl3_ttf_library()
+	for hint, val in conf.win_hints.pairs: sdl.SetHint(hint, val)
 	sdl.Init(sdl.INIT_VIDEO or sdl.INIT_EVENTS); defer: sdl.Quit()
 	sdl.XTTFInit(); defer: sdl.XTTFQuit()
 	sdl.SetAppMetadata(conf.win_title, conf.app_version, conf.app_id)
 	sdl.EnableScreenSaver() # gets disabled by default
-	for hint, val in conf.win_hints.pairs: sdl.SetHint(hint, val)
 
 	let (win, win_rdr) = sdl.CreateWindowAndRenderer( conf.win_title,
 		conf.win_w, conf.win_h, sdl.WINDOW_VULKAN or conf.win_flags )
