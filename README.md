@@ -182,7 +182,8 @@ there should be following output files for two general parts:
 
     `rm -rf /sys/fs/bpf/leco` can be used to cleanup those loaded eBPFs afterwards.\
     `cat events.fifo` to see all captured connection information/events.\
-    `bpftool map dump pinned /sys/fs/bpf/leco/maps/...` to check on eBPF data manually.
+    `leco-event-pipe -p /sys/fs/bpf/leco -EC` - dump recent event data anytime.\
+    `bpftool map dump pinned /sys/fs/bpf/leco/maps/...` to check raw eBPF data.
 
 - Visualization part: `leco-sdl-widget` + `leco-sdl-widget.ini`
 

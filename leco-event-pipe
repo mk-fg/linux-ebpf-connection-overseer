@@ -41,6 +41,7 @@ def td_parse(td, _tds = dict(
 		d=1*86400, day=1*86400, h=3600, hr=3600, hour=3600,
 		m=60, min=60, minute=60, s=1, sec=1, second=1 )):
 	'Parse [[HH:]MM:]SS or e.g. 5h30m and such time-deltas to seconds'
+	if td is None: return None
 	if isinstance(td, (int, float)): return td
 	delta, td_re = 0, ( '(?i)^[-+]?' + ''.join( fr'(?P<{k}>\d+{k}s?\s*)?' for k, v in
 		sorted(_tds.items(), key=lambda kv: (kv[1], len(kv[0])), reverse=True) ) + '$' )
@@ -335,9 +336,9 @@ def main(argv=None):
 	parser.add_argument('-r', '--replay-window', metavar='delta', help=dd('''
 		Ignore pre-buffered events older than specified time-delta.
 		time-delta values can be a number of seconds, [[HH:]MM:]SS or e.g. 5h30m'''))
-	parser.add_argument('--extra-ev-data', action='store_true',
+	parser.add_argument('-E', '--extra-ev-data', action='store_true',
 		help='Pass through all extra event info for debugging, not just the necessary stuff.')
-	parser.add_argument('--dump-cache', action='store_true',
+	parser.add_argument('-C', '--dump-cache', action='store_true',
 		help='Only stream/dump data for conn_map cache and exit.')
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
 
