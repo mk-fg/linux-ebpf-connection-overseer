@@ -83,7 +83,7 @@ class TimedCacheDict(cs.UserDict):
 
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
-err_fmt = lambda err: f'[{err.__class__.__name__}] {err}'
+inst_fmt = lambda v: f'[{v.__class__.__name__}] {v}'
 
 
 class CgroupMap:
@@ -180,7 +180,7 @@ class BPFMap:
 
 class BPFMapHashTable(BPFMap):
 	# There's no good high-level API for opening maps from fds,
-	#   so using "low-level" api here, which is same thing but with less hassle.
+	#  so using "low-level" api here, which is same thing but with less hassle.
 	# Also trivial to use direct syscalls instead, but libbpf is needed for rbs anyway.
 
 	def __init__(self, fd=None, path=None):
@@ -194,9 +194,7 @@ class BPFMapHashTable(BPFMap):
 		self.batch_flags = self._map_batch_opts(sz=ct.sizeof(self._map_batch_opts))
 
 	def read(self, batch=64):
-		# Array batches always iterate over all entries, with all keys
-		#  always set sequentially, but values are zeroed-out for unused elements.
-		# ENOENT shouldn't happen here, but indicates that q goes beyond max_entries.
+		# ENOENT shouldn't happen here, but indicates that q goes beyond max_entries
 		vals, a, b = list(), ct.pointer(ct.c_void_p()), ct.pointer(ct.c_void_p())
 		kb_data, vb_data = (bytearray(n * batch) for n in [self.ksz, self.vsz])
 		kb, vb = ct.c_char.from_buffer(kb_data), ct.c_char.from_buffer(vb_data)
@@ -236,7 +234,7 @@ class BPFMapRingBuffer(BPFMap):
 		return tuple(self.updates)
 
 
-def ev_conv_cg_label(cgid, cg_map, cache=None, cut=20):
+def ev_conv_cg_fmt(cgid, cg_map, cache=None, cut=20):
 	'Resolves, cuts down, disambiguates and caches cgroup names'
 	if not (cgp0 := cg_map.get(cgid)): return
 	if cache and (cgn := cache.get(cgp0)): return cgn
@@ -262,7 +260,11 @@ def ev_conv_cg_label(cgid, cg_map, cache=None, cut=20):
 		if isinstance(cache, dict) and not cgp1: cache[cgn], cache[cgp0] = cgp0, cgn
 		return cgn
 
-def ev_conv(e, all_data=False, cg_label=None, cache_uid=None, cache_ts=None):
+def ev_conv_ep_fmt(addr, port, proto):
+	return f'{addr} {port}' + (f'/{proto}' if proto != 'tcp' else '')
+
+def ev_conv( e, all_data=False, local_ep=False,
+		fmt_ep=None, fmt_cg=None, cache_uid=None, cache_ts=None ):
 	# XXX: resolve addrs to hosts/asns
 	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
 	if not (cache_ts and (ev_ts := cache_ts.get(e.ns))): # "conn started" time
@@ -275,18 +277,25 @@ def ev_conv(e, all_data=False, cg_label=None, cache_uid=None, cache_ts=None):
 		except KeyError: u = str(e.uid)
 		if cache_uid is not None: cache_uid[e.uid] = u
 	comm = re.sub(r'::+', ':', e.comm)
-	if cg_label and (cg := cg_label(e.cg)) and cg != comm: comm = f'{comm} [{cg}]'
-	ev.line = ' :: '.join([ ev_ts, u, comm,
-		f'{e.raddr} {e.rport}' + (f'/{e.proto}' if e.proto != 'tcp' else ''),
+	if fmt_cg and (cg := fmt_cg(e.cg)) and cg != comm: comm = f'{comm} [{cg}]'
+	ep_info = fmt_ep(e.raddr, e.rport, e.proto),
+	if local_ep: ep_info = (fmt_ep(e.laddr, e.lport, e.proto),) + ep_info
+	ev.line = ' :: '.join([ ev_ts, u, comm, *ep_info,
 		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' if e.rx + e.tx > 5 * 2**10 else '' ])
 	if all_data: ev = dict(e, **ev)
 	return ev
 
 def json_conv(v):
 	if ip_repr := getattr(v, 'compressed', None): return ip_repr
-	raise TypeError(f'Non-JSON type [{v.__class__.__name__}] {v}')
+	raise TypeError(f'Non-JSON type {inst_fmt(v)}')
 
-def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
+def stream_events_pid_check(pid):
+	try: os.kill(pid, 0)
+	except PermissionError: pass
+	except ProcessLookupError: return False
+	return True
+
+def stream_events(cache, rb, dst, ev_proc, replay_check_pids=False, replay_limit=None):
 	def _dst_write(ev, ns):
 		try:
 			dst.write(json.dumps(ev, default=json_conv))
@@ -300,6 +309,7 @@ def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
 		if replay_limit: ns_cutoff = ns - replay_limit * 1_000_000_000
 		for ev in sorted(cache.read(), key=lambda ev: ev.ns_trx):
 			if (ns_cache := ev.ns_trx) < ns_cutoff: continue
+			if replay_check_pids and not stream_events_pid_check(ev.pid): continue
 			if _dst_write(ev_proc(ev), ns): return
 		if not rb: return # one-off cache dump
 		poll.register(dst_fd := dst.fileno(), 0)
@@ -309,6 +319,10 @@ def stream_events(cache, rb, dst, ev_proc, replay_limit=None):
 			if ev_fds[0][0] == dst_fd: break # dst pipe closed
 			for ev in rb.wait(0.1): # shouldn't actually need to wait
 				if ev.ns_trx <= ns_cache or ev.ns_trx < ns_cutoff: continue
+				if replay_check_pids: # only needed for initial queue here
+					if replay_check_pids is True: replay_check_pids = time.time()
+					elif time.time() - replay_check_pids > 30: replay_check_pids = False
+					if not stream_events_pid_check(ev.pid): continue
 				if _dst_write(ev_proc(ev), time.monotonic_ns()): return
 			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
 
@@ -316,15 +330,30 @@ def main(argv=None):
 	import argparse, textwrap
 	dd = lambda text: re.sub( r' \t+', ' ',
 		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
+	conf_str = dd('''
+		# Time-delta values can be a number of seconds, [[HH:]MM:]SS or e.g. 5h30m.
+		replay-window=4h # ignore pre-buffered events older than specified time-delta
+		replay-skip-dead-pids=0 # set =1 to only replay old info on pids that are still around
+		local-addr-port=0 # add local addr/port endpoint info before remote one
+		cg-label-cut=20 # longer cgroup names are cut to that, like "app-flatpak-net.lut+"
+		cache-cg-paths=4h # time-delta to forget old cgroup id-name mappings
+		cache-cg-labels=30m # used for displayed short/disambiguated cgroup labels
+		cache-users=4h # time-delta for user id-name cache (from /etc/passwd, nss, etc)
+		cache-conn-ts=1h # cache for formatted connection timestamps
+		extra-ev-data=0 # same as -E/--extra-ev-data command-line option''')
 	parser = argparse.ArgumentParser(
 		formatter_class=argparse.RawTextHelpFormatter, description=dd('''
 			Script to monitor and forward eBPF events to UI components as json-lines.
 			By default checks systemd service env vars,
 				uses map sockets from there and outputs stream of events to stdout.
 			Alternative is to use -p/--pin option to open/use bpffs-pinned maps.
-			Streams events from pre-populated conn_map first and updates after that.
+			Streams events from pre-populated conn_map
+				hash-table first, and "updates" ring-buffer events after that.
 			Replayed old event times are calculated using monotonic clock offset
-				from current wall-clock time, so don't take system suspend into account.'''))
+				from current wall-clock time, so don't take system suspend into account.'''),
+		epilog=dd(f'''
+			Optional tweaks for -c/--conf or env-vars (e.g. LECO_REPLAY_WINDOW=1d8h):
+				{"\n				".join(conf_str.splitlines())}''') + ' ')
 	parser.add_argument('-f', '--fifo', metavar='path', help=dd('''
 		FIFO path to use to output stream of events instead of stdout.
 		Must be pre-existing, will be reused when other side closes it,
@@ -333,14 +362,28 @@ def main(argv=None):
 		Top-level path under which all eBPF objects are pinned.
 		This script will only access objects under "map" subdirectory.
 		Typically under /sys/fs/bpf/ mountpoint. Might require privileged access.'''))
-	parser.add_argument('-r', '--replay-window', metavar='delta', help=dd('''
-		Ignore pre-buffered events older than specified time-delta.
-		time-delta values can be a number of seconds, [[HH:]MM:]SS or e.g. 5h30m'''))
 	parser.add_argument('-E', '--extra-ev-data', action='store_true',
 		help='Pass through all extra event info for debugging, not just the necessary stuff.')
 	parser.add_argument('-C', '--dump-cache', action='store_true',
-		help='Only stream/dump data for conn_map cache and exit.')
+		help='Only dump/stream data from eBPF conn_map hash-table and exit.')
+	parser.add_argument('-c', '--conf', metavar='space-separated-opts', help=dd('''
+		Space-separated list of optional parameter overrides. Takes priority over env vars.
+		Output from -h/--help option should have a full list of these, same key=value format.'''))
 	opts = parser.parse_args(sys.argv[1:] if argv is None else argv)
+
+	conf, conf_parse = adict(), dict()
+	for ls, opt in (conf_str.splitlines(), False), ((opts.conf or '').split(), True):
+		for line in ls:
+			if not (m := re.match(r'(\S+)=(\S+)', line.strip())):
+				if opt: parser.error(f'Unrecognized key=value option format: {line!r}')
+				continue
+			k, v = m[1].lower().replace(*'-_'), m[2]
+			if not opt:
+				conf_parse[k] = td_parse if re.fullmatch(r'\d+[smhd]', v) else int
+				if ev := os.environ.get(f'leco_{k}'.upper()): v = ev
+			elif k not in conf: parser.error(f'Unrecognized option {k!r} in {line!r}')
+			conf[k] = conf_parse[k](v)
+	if opts.extra_ev_data: conf.extra_ev_data = True
 
 	if not opts.pin:
 		sd_pid, sd_fds = (
@@ -366,16 +409,19 @@ def main(argv=None):
 
 	signal.signal(signal.SIGINT, signal.SIG_DFL)
 	with ( bpf_rb as rb, bpf_cache as cache,
-			CgroupMap(cache=TimedCacheDict(4*3600)) as cg_map ):
+			CgroupMap(cache=TimedCacheDict(conf.cache_cg_paths)) as cg_map ):
 		if opts.dump_cache: rb = None
 		stream_kws = dict(
-			cache=cache, rb=rb, replay_limit=td_parse(opts.replay_window),
+			cache=cache, rb=rb,
+			replay_limit=td_parse(conf.replay_window),
+			replay_check_pids=bool(conf.replay_skip_dead_pids),
 			ev_proc=ft.partial( ev_conv,
-				all_data=opts.extra_ev_data,
-				cg_label=ft.partial( ev_conv_cg_label,
-					cg_map=cg_map, cut=20, cache=TimedCacheDict(30*60) ),
-				cache_uid=TimedCacheDict(4*3600),
-				cache_ts=TimedCacheDict(3600, bump_on_get=False) ))
+				all_data=bool(conf.extra_ev_data), local_ep=bool(conf.local_addr_port),
+				fmt_ep=ev_conv_ep_fmt, fmt_cg=ft.partial( ev_conv_cg_fmt,
+					cg_map=cg_map, cut=conf.cg_label_cut,
+					cache=TimedCacheDict(conf.cache_cg_labels) ),
+				cache_uid=TimedCacheDict(conf.cache_users),
+				cache_ts=TimedCacheDict(conf.cache_conn_ts, bump_on_get=False) ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
 		# XXX: support sending to multiple receivers
 		while dst := open(os.open(opts.fifo, os.O_WRONLY), 'w'):

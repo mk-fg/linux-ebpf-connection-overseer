@@ -17,7 +17,7 @@ BindPaths=/run/user/%i/leco.fifo:/run/leco.fifo
 # ExecStartPre= has issues tracking fds, so --pin in required here
 # See https://github.com/systemd/systemd/issues/37192 for details
 ExecStartPre=+leco-ebpf-load -p /sys/fs/bpf/leco --pin-fdstore
-ExecStart=leco-event-pipe -f /run/leco.fifo --replay-window 4h
+ExecStart=leco-event-pipe -f /run/leco.fifo
 
 # Generic systemd sandboxing options
 DynamicUser=yes

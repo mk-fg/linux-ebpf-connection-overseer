@@ -168,6 +168,10 @@ there should be following output files for two general parts:
     `/etc/systemd/system`, then enable/start it desktop user's uid as an
     instance name (as in `id -u`, often 1000): `systemctl enable --now leco@1000`
 
+    Run `leco-event-pipe` with `-h/--help` for a list of options, which can be
+    customized using environment variables, added via e.g. `systemctl edit leco@`
+    command and `Environment=` or `EnvironmentFile=` lines there (see [man systemd.exec]).
+
     Or, alternatively, e.g. for manual testing, these can be (re-)started
     separately from terminal via following commands:
 
@@ -209,6 +213,8 @@ on R5 5600X, less than conky), not add any significant kernel overhead (very bas
 overlay or background widget.
 
 More specific features and configuration options are described in more detail below.
+
+[man systemd.exec]: https://man.archlinux.org/man/systemd.exec.5#ENVIRONMENT
 
 
 <a name=hdr-regular_expressions_in_rx-_sections></a>
@@ -322,9 +328,7 @@ It's working fine for me as it is, but there's always plenty of room for improve
 
 - Unfinished and minor stuff.
 
-    - pipe: add option for including a local socket part, can be stripped by regexp.
     - pipe: rate-limit updates, in addition to rate-limit in ebpf.
-    - pipe: don't send backlog info on dead pids to new clients (optional).
     - pipe: auto-detect/replace non-useful interpreter names like "python3" from /proc.
     - ebpf: check how firewalled conns get handled, make those visually distinctive.
     - ebpf: add udp sendmsg kprobe to set/update raddr in unconnected udp sockets.
