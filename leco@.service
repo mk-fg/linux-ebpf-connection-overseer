@@ -22,7 +22,7 @@ ExecStart=leco-event-pipe -f /run/leco.fifo
 # Generic systemd sandboxing options
 DynamicUser=yes
 ProcSubset=pid
-ProtectProc=invisible
+# ProtectProc=invisible - to allow cache-pid-cmd lookups
 ProtectHome=yes
 PrivateDevices=yes
 PrivateUsers=yes

@@ -329,7 +329,6 @@ It's working fine for me as it is, but there's always plenty of room for improve
 - Unfinished and minor stuff.
 
     - pipe: rate-limit updates, in addition to rate-limit in ebpf.
-    - pipe: auto-detect/replace non-useful interpreter names like "python3" from /proc.
     - ebpf: check how firewalled conns get handled, make those visually distinctive.
     - ebpf: add udp sendmsg kprobe to set/update raddr in unconnected udp sockets.
     - ebpf: add handling for more ipproto variants - sctp and few others like that.
