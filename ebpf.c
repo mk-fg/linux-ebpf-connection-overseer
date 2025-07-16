@@ -1,9 +1,7 @@
 // Docs: https://docs.ebpf.io/
 
-// XXX: test incoming conns, check how to identify those
-// XXX: re-add kprobes for wireguard tunnels
-// XXX: test how tracepoints work with firewalled conns
-// XXX: check packets on some skb-egress hook, mark in maps which ones get through
+// sock_send / sock_recv tracepoints used here ignore firewall rules, e.g. script
+//  doing send() to nftables-blocked remote or on closed socket will still trigger those.
 
 #define KBUILD_MODNAME "leco"
 
@@ -68,7 +66,7 @@ static __always_inline void conn_update(struct sock *sk, u16 proto, int bs) {
 	struct conn_t *connp = bpf_map_lookup_elem(&conn_map, &ck);
 	if (connp) { // pre-existing connection - update counters
 		if (bs < 0) connp->rx += -bs; else connp->tx += bs;
-		if (ns < (connp->ns_trx + CONN_TRX_UPD_NS)) return;
+		if (ns < (connp->ns_trx + CONN_TRX_UPD_NS)) return; // rate-limits ringbuf updates
 		connp->ns_trx = ns; }
 
 	else { // new connection - gather socket/process info
@@ -118,18 +116,14 @@ struct sock_data_ctx {
 
 SEC("tracepoint/sock/sock_send_length")
 int tp__sock_send(struct sock_data_ctx *ctx) {
-	if ( !(ctx->family == AF_INET || ctx->family == AF_INET6)
-		// XXX: add more protocols
-		|| !(ctx->protocol == IPPROTO_TCP || ctx->protocol == IPPROTO_UDP) ) return 0;
+	if (!(ctx->family == AF_INET || ctx->family == AF_INET6)) return 0;
 	conn_update(ctx->sk, ctx->protocol, ctx->ret > 0 ? ctx->ret : 0);
 	return 0;
 }
 
 SEC("tracepoint/sock/sock_recv_length")
 int tp__sock_recv(struct sock_data_ctx *ctx) {
-	if ( !(ctx->family == AF_INET || ctx->family == AF_INET6)
-		// XXX: add more protocols
-		|| !(ctx->protocol == IPPROTO_TCP || ctx->protocol == IPPROTO_UDP) ) return 0;
+	if (!(ctx->family == AF_INET || ctx->family == AF_INET6)) return 0;
 	conn_update( ctx->sk, ctx->protocol,
 		((ctx->flags & MSG_PEEK) == 0 && ctx->ret > 0) ? -ctx->ret : 0 );
 	return 0;
