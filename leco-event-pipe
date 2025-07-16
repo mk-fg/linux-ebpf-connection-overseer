@@ -234,7 +234,7 @@ class BPFMapRingBuffer(BPFMap):
 			self.rb, int(timeout*1000) ) <= 0: return () # timeout/error
 		return tuple(self.updates)
 
-def ev_conv_fmt_pid_cmd(comm, pid, cache=None, _shebangs=set( '''
+def ev_conv_fmt_pid_cmd(comm, pid, cut=16, cache=None, _shebangs=set( '''
 		python python3 java node perl lua php stack ocamlscript nimrun
 		tcl tclsh sh zsh bash nix-shell awk scm guile clisp racket cl sbcl'''.split() )):
 	'Gets script name from /proc/<pid>/cmdline for common interpreters'
@@ -244,16 +244,15 @@ def ev_conv_fmt_pid_cmd(comm, pid, cache=None, _shebangs=set( '''
 		try: cmd = pl.Path(f'/proc/{pid}/cmdline').read_bytes().split(b'\0')
 		except OSError: cmd = list()
 		for arg in cmd[1:]:
-			if not arg or arg[0] == b'-' or b'=' in arg: continue # skips e.g. -L level=info
-			if ( '.' in (arg := arg.decode(errors='replace'))
-				or '/' in arg ): cmd = arg.rsplit('/')[-1]; break
-		else: cmd.clear()
-	if cmd and len(cmd) > 16:
-		for n in range(len(cmd) - 16):
-			if (cmds := cmd[n:n+16]) not in cache or cache[cmds] == cmd:
-				if n: cmds = f'+{cmds[1:]}'
-				break
-		else: cmds = cmd[:16]
+			if not arg or arg[0] == b'-' or b'=' in arg: cmd.clear(); continue
+			if '.' in (arg := arg.decode(errors='replace')) or '/' in arg:
+				cmd = (f'{comm}/' if not cmd else '') + arg.rsplit('/')[-1]
+				break # cmd can be "python3 -W ignore script.py", so keep prefix if opts are there
+		else: cmd = ''
+	if cmd and len(cmd) > cut:
+		n, cmds = 1, f'{cmd[:cut-1]}+'
+		while cmds in cache and cache[cmds] != cmd and n <= 99:
+			ns = str(n); cmds = cmds[:cut-1-len(ns)] + f'~{ns}'; n += 1
 		cmd, cache[cmds] = cmds, cmd
 	cmd = cache[pid] = cmd or comm; return cmd
 
@@ -356,11 +355,12 @@ def main(argv=None):
 		textwrap.dedent(text).strip('\n') + '\n' ).replace('\t', '  ')
 	conf_str = dd('''
 		# Time-delta values can be a number of seconds, [[HH:]MM:]SS or e.g. 5h30m.
-		# Setting cache-cg-labels or cache-pid-cmd to negative values disables adding those.
+		# Setting *-cut, cache-cg-labels or cache-pid-cmd to negative vals disables adding those.
 		replay-window=4h # ignore pre-buffered events older than specified time-delta
 		replay-skip-dead-pids=0 # set =1 to only replay old info on pids that are still around
 		local-addr-port=0 # add local addr/port endpoint info before remote one
 		cg-label-cut=20 # longer cgroup names are cut to that, like "app-flatpak-net.lut+"
+		script-name-cut=16 # limit detected interpreted script names to this length
 		cache-cg-paths=4h # time-delta to forget old cgroup id-name mappings
 		cache-cg-labels=30m # used for displayed short/disambiguated cgroup labels
 		cache-users=4h # time-delta for user id-name cache (from /etc/passwd, nss, etc)
@@ -437,11 +437,11 @@ def main(argv=None):
 	with ( bpf_rb as rb, bpf_cache as cache,
 			CgroupMap(cache=TimedCacheDict(conf.cache_cg_paths)) as cg_map ):
 		if opts.dump_cache: rb = None
-		fmt_cmd = None if (c := conf.cache_pid_cmd) < 0 else ( ev_conv_fmt_pid_cmd
-			if not c else ft.partial(ev_conv_fmt_pid_cmd, cache=TimedCacheDict(c)) )
-		fmt_cg = ( None if (cut := conf.cg_label_cut) <= 0 or (c := conf.cache_cg_labels) < 0
-			else ft.partial( ev_conv_fmt_cg, cg_map=cg_map,
-				cut=conf.cg_label_cut, cache=TimedCacheDict.optional(c) ) )
+		fmt_cmd = (
+			None if (n := conf.script_name_cut) <= 0 or (c := conf.cache_pid_cmd) < 0
+			else ft.partial(ev_conv_fmt_pid_cmd, cut=n, cache=TimedCacheDict.optional(c)) )
+		fmt_cg = ( None if (n := conf.cg_label_cut) <= 0 or (c := conf.cache_cg_labels) < 0
+			else ft.partial(ev_conv_fmt_cg, cg_map=cg_map, cut=n, cache=TimedCacheDict.optional(c)) )
 		stream_kws = dict(
 			cache=cache, rb=rb,
 			replay_limit=td_parse(conf.replay_window),
