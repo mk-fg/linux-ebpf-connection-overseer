@@ -81,6 +81,9 @@ class TimedCacheDict(cs.UserDict):
 		return k in self.data and (time.monotonic() - self.ts.get(k, 0)) <= self.timeout
 	def __getitem__(self, k): return self.cache(k)
 	def __setitem__(self, k, v): return self.cache(k, v)
+	def get(self, k, default=None):
+		try: return self[k]
+		except KeyError: return default
 
 p = lambda *a,**kw: print(*a, **kw, flush=True)
 p_err = lambda *a,**kw: print(*a, **kw, file=sys.stderr, flush=True) or 1
