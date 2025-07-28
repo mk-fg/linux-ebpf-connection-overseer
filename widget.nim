@@ -30,6 +30,7 @@ type Conf = ref object
 	win_hints: Table[HintName, string]
 	font_file = ""
 	font_h = 14
+	font_shadow: seq[tuple[x: int, y: int, c: Color]]
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
@@ -237,8 +238,11 @@ proc parse_conf_file(conf_path: string): Conf =
 		log_debug(&"line-fade-curve: final shape {result}")
 
 	proc parse_color(val: string): Color =
-		let v = val.strip(chars={' ','#'})
-		if v.len != 8: raise ValueError.new_exception("rgba: color should be 8 hex-digits")
+		var v = val.strip(chars={' ','#'})
+		if v.len == 4:
+			for n in 0 .. 3: v.add v[n]; v.add v[n]
+			v = v.substr(4)
+		if v.len != 8: raise ValueError.new_exception("rgba: color should be 4 or 8 hex-digits")
 		let c = v.from_hex[:uint32]
 		return Color( r: uint8((c shr 24) and 0xff),
 			g: uint8((c shr 16) and 0xff), b: uint8((c shr 8) and 0xff), a: uint8(c and 0xff) )
@@ -306,6 +310,16 @@ proc parse_conf_file(conf_path: string): Conf =
 				case key:
 				of "font": conf.font_file = val
 				of "font-height": conf.font_h = val.parse_int
+				of "font-shadow":
+					for s in val.split(' '):
+						if s == "": continue
+						let xyc = s.split(',')
+						if xyc.len == 2: conf.font_shadow.add (
+							xyc[0].parse_int, xyc[1].parse_int, Color(r:0, g:0, b:0, a:0xff) )
+						elif xyc.len == 3: conf.font_shadow.add (
+							xyc[0].parse_int, xyc[1].parse_int, xyc[2].parse_color )
+						else: raise ValueError.new_exception(
+							&"Unrecognized font-shadow tuple format [ {s} ]" )
 				of "line-height":
 					if val.contains("."): conf_text_hx = val.parse_float
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
@@ -553,7 +567,7 @@ method check_texture(o: var Painter): bool =
 		if w == o.ww and h == o.wh: return false
 		o.tex.DestroyTexture()
 	o.ww = w; o.wh = h
-	w -= 2*o.conf.win_px; h -= 2*o.conf.win_px;
+	w -= o.conf.win_px; h -= o.conf.win_py
 	o.tex = o.rdr.CreateTexture(
 		sdl.PIXELFORMAT_ARGB8888, sdl.TEXTUREACCESS_TARGET, w, h )
 	o.rdr.SetRenderTarget(o.tex); o.rdr.RenderClear()
@@ -571,6 +585,31 @@ method row_uid(o: Painter, ns: CNS): (string, Color) =
 		uid = o.conf.line_uid_fmt % uid_str.encode(safe=true)[0 .. o.conf.line_uid_chars]
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)
+
+method row_draw(o: Painter, row: PaintedRow, cleanup: bool): int =
+	var x = o.conf.win_px; var y = o.conf.win_py + row.n * o.conf.line_h
+	o.rdr.SetRenderTarget(o.tex)
+	if cleanup:
+		let cx = if row.replaced: 0 else: x + o.uid_w
+		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
+		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
+		o.rdr.RenderFillRect(cx, y, o.tw - cx, o.conf.line_h)
+	y += o.oy
+	if row.replaced:
+		o.txt.SetTextString(row.uid)
+		for xyc in o.conf.font_shadow:
+			o.txt.SetTextColor(xyc.c)
+			o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
+		o.txt.SetTextColor(row.uid_color)
+		o.txt.DrawRendererText(x, y)
+	x += o.uid_w
+	o.txt.SetTextString(row.line)
+	for xyc in o.conf.font_shadow:
+		o.txt.SetTextColor(xyc.c)
+		o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
+		result = max(result, abs(xyc.y))
+	o.txt.SetTextColor(o.conf.color_fg)
+	o.txt.DrawRendererText(x, y)
 
 method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 	## Returns updated/replaced rows that need to be repainted.
@@ -606,30 +645,16 @@ method draw(o: var Painter): bool =
 	## Clear/update window contents buffer, returns true if there are any changes.
 	## Maintains single texture with all text lines in the right places,
 	##   and copies those to window with appropriate effects applied per-frame.
-	let
+	var
 		ts = get_mono_time().ticks
 		new_texture = o.check_texture()
+		updates = o.row_updates(ts)
+		y_shadow_pad = 0
 
 	# Update any new/changed rows on the texture
-	var updates = o.row_updates(ts)
-	for row in updates.mitems:
-		row.fade_out_n = 0
-		var y = row.n * o.conf.line_h
-		o.rdr.SetRenderTarget(o.tex)
-		if not new_texture: # no need to cleanup if it's fresh
-			let x = if row.replaced: 0 else: o.uid_w
-			o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
-			o.rdr.SetRenderDrawColor(0, 0, 0, 0)
-			o.rdr.RenderFillRect(x, y, o.tw - x, o.conf.line_h)
-		y += o.oy
-		if row.replaced:
-			o.txt.SetTextColor(row.uid_color)
-			o.txt.SetTextString(row.uid)
-			o.txt.DrawRendererText(0, y)
-			o.txt.SetTextColor(o.conf.color_fg)
-		o.txt.SetTextString(row.line)
-		o.txt.DrawRendererText(o.uid_w, y)
-		result = true
+	for row in updates.mitems():
+		result = true; row.fade_out_n = 0
+		y_shadow_pad = o.row_draw(row, not new_texture)
 		log_debug( "Row " &
 			(if row.replaced: "replace" else: "update") &
 			&": #{row.n} :: {row.uid} {row.line}" )
@@ -652,11 +677,12 @@ method draw(o: var Painter): bool =
 			result = true
 		let alpha = o.fade_out[row.fade_out_n][1]
 		if alpha == 0: continue
-		let y = row.n * o.conf.line_h
+		var y = row.n * o.conf.line_h; var h = o.conf.line_h
+		if row.n > 0: y += o.conf.win_py
+		else: h += o.conf.win_py
+		y -= y_shadow_pad; h += y_shadow_pad * 2
 		o.tex.SetTextureAlphaMod(alpha)
-		o.rdr.RenderTexture( o.tex,
-			0, y, o.tw, o.conf.line_h, o.conf.win_px,
-			o.conf.win_py + y, o.tw, o.conf.line_h )
+		o.rdr.RenderTexture(o.tex, 0, y, o.tw, h, 0, y, o.tw, h)
 
 {.pop.}
 

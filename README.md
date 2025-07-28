@@ -377,7 +377,6 @@ It's working fine for me as it is, but there's always plenty of room for improve
 
     - ebpf: add udp sendmsg kprobe to set/update raddr in unconnected udp sockets.
     - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
-    - widget: nicer text with a halo/outline.
     - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
     - Some distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
 
