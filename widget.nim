@@ -645,11 +645,8 @@ method draw(o: var Painter): bool =
 	## Clear/update window contents buffer, returns true if there are any changes.
 	## Maintains single texture with all text lines in the right places,
 	##   and copies those to window with appropriate effects applied per-frame.
-	var
-		ts = get_mono_time().ticks
-		new_texture = o.check_texture()
-		updates = o.row_updates(ts)
-		y_shadow_pad = 0
+	let ts = get_mono_time().ticks; let new_texture = o.check_texture()
+	var updates = o.row_updates(ts); var y_shadow_pad = 0
 
 	# Update any new/changed rows on the texture
 	for row in updates.mitems():
@@ -677,10 +674,8 @@ method draw(o: var Painter): bool =
 			result = true
 		let alpha = o.fade_out[row.fade_out_n][1]
 		if alpha == 0: continue
-		var y = row.n * o.conf.line_h; var h = o.conf.line_h
-		if row.n > 0: y += o.conf.win_py
-		else: h += o.conf.win_py
-		y -= y_shadow_pad; h += y_shadow_pad * 2
+		var y = row.n * o.conf.line_h; var h = o.conf.line_h + y_shadow_pad
+		if row.n > 0: y += o.conf.win_py else: h += o.conf.win_py
 		o.tex.SetTextureAlphaMod(alpha)
 		o.rdr.RenderTexture(o.tex, 0, y, o.tw, h, 0, y, o.tw, h)
 
