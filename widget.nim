@@ -31,6 +31,7 @@ type Conf = ref object
 	font_file = ""
 	font_h = 14
 	font_shadow: seq[tuple[x: int, y: int, c: Color]]
+	font_shadow_pad = 0 # auto-calculated from font_shadow values
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
@@ -320,6 +321,7 @@ proc parse_conf_file(conf_path: string): Conf =
 							xyc[0].parse_int, xyc[1].parse_int, xyc[2].parse_color )
 						else: raise ValueError.new_exception(
 							&"Unrecognized font-shadow tuple format [ {s} ]" )
+						conf.font_shadow_pad = max(conf.font_shadow_pad, xyc[1].parse_int)
 				of "line-height":
 					if val.contains("."): conf_text_hx = val.parse_float
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
@@ -586,7 +588,7 @@ method row_uid(o: Painter, ns: CNS): (string, Color) =
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)
 
-method row_draw(o: Painter, row: PaintedRow, cleanup: bool): int =
+method row_draw(o: Painter, row: PaintedRow, cleanup: bool) =
 	var x = o.conf.win_px; var y = o.conf.win_py + row.n * o.conf.line_h
 	o.rdr.SetRenderTarget(o.tex)
 	if cleanup:
@@ -607,7 +609,6 @@ method row_draw(o: Painter, row: PaintedRow, cleanup: bool): int =
 	for xyc in o.conf.font_shadow:
 		o.txt.SetTextColor(xyc.c)
 		o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
-		result = max(result, abs(xyc.y))
 	o.txt.SetTextColor(o.conf.color_fg)
 	o.txt.DrawRendererText(x, y)
 
@@ -646,12 +647,12 @@ method draw(o: var Painter): bool =
 	## Maintains single texture with all text lines in the right places,
 	##   and copies those to window with appropriate effects applied per-frame.
 	let ts = get_mono_time().ticks; let new_texture = o.check_texture()
-	var updates = o.row_updates(ts); var y_shadow_pad = 0
 
 	# Update any new/changed rows on the texture
+	var updates = o.row_updates(ts)
 	for row in updates.mitems():
 		result = true; row.fade_out_n = 0
-		y_shadow_pad = o.row_draw(row, not new_texture)
+		o.row_draw(row, not new_texture)
 		log_debug( "Row " &
 			(if row.replaced: "replace" else: "update") &
 			&": #{row.n} :: {row.uid} {row.line}" )
@@ -674,7 +675,7 @@ method draw(o: var Painter): bool =
 			result = true
 		let alpha = o.fade_out[row.fade_out_n][1]
 		if alpha == 0: continue
-		var y = row.n * o.conf.line_h; var h = o.conf.line_h + y_shadow_pad
+		var y = row.n * o.conf.line_h; var h = o.conf.line_h + o.conf.font_shadow_pad
 		if row.n > 0: y += o.conf.win_py else: h += o.conf.win_py
 		o.tex.SetTextureAlphaMod(alpha)
 		o.rdr.RenderTexture(o.tex, 0, y, o.tw, h, 0, y, o.tw, h)
