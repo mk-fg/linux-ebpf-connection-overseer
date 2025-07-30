@@ -72,8 +72,8 @@ void parse_opts( int argc, char *argv[],
 }
 
 
-#define fd_version 1
-#define fd_version_check "tp__sock_send__v1"
+#define fd_version 2
+#define fd_version_check "tp__sock_send__v2"
 
 int main(int argc, char **argv) {
 	int opt_verbose = false, opt_pin_fdstore = false; char *opt_pin = "";

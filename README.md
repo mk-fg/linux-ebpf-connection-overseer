@@ -101,7 +101,7 @@ In short:
 - Build-only dependencies/tools: [cmake], [make], [llvm], [clang], [Nim].
 
 - Runtime dependencies: [python], [libbpf], [SDL3], [SDL3_ttf],
-  linux 6.3+ kernel with eBPF tracepoints enabled.
+  linux 6.3+ kernel with eBPF kprobes and tracepoints enabled.
 
 - Outputs: `leco-ebpf-load`, `leco-event-pipe`, `leco-sdl-widget`, `leco-sdl-widget.ini`
 
@@ -118,11 +118,12 @@ More specifically:
     with following config options enabled:
 
     ``` console
-    % bsdcat /proc/config.* | grep -E 'CONFIG_(BPF|TRACEPOINTS)='
-    ## Alternatively: grep -E 'CONFIG_(BPF|TRACEPOINTS)=' /boot/config-$(uname -r)
+    % bsdcat /proc/config.* | grep -E 'CONFIG_(BPF|TRACEPOINTS|KPROBES)='
+    ## Alternatively: grep -E 'CONFIG_(BPF|TRACEPOINTS|KPROBES)=' /boot/config-$(uname -r)
     ## Or also: cat /sys/kernel/debug/tracing/events/sock/sock_send_length/format
     CONFIG_BPF=y
     CONFIG_TRACEPOINTS=y
+    CONFIG_KPROBES=y
     ```
 
     (which can be enabled via `BPF_SYSCALL` + `FTRACE` + `KPROBE_EVENTS`)
@@ -375,7 +376,6 @@ It's working fine for me as it is, but there's always plenty of room for improve
 
 - Unfinished and minor stuff.
 
-    - ebpf: add udp sendmsg kprobe to set/update raddr in unconnected udp sockets.
     - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
     - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
     - Some distinction for in/out conns (accept/recvmsg vs connect/sendmsg).

@@ -260,6 +260,7 @@ def ev_conv_fmt_pid_cmd(comm, pid, cut=16, cache=None, _shebangs=set( '''
 	cmd = cache[pid] = cmd or comm; return cmd
 
 def ev_conv_fmt_ep(addr, port, proto):
+	if addr == '::': addr = '[::]'
 	return f'{addr} {port}' + (f'/{proto}' if proto != 'tcp' else '')
 
 def ev_conv_fmt_cg(cgid, cg_map, cache=None, cut=20):
