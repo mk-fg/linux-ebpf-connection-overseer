@@ -81,10 +81,12 @@ static __always_inline bool conn_update_msg_ep(
 	connp->raddr = addr; connp->rport = port; return true;
 }
 
-static __always_inline void conn_update(
-		struct sock *sk, u16 proto, int bs, struct msghdr *msg) {
+static __always_inline void conn_update(struct sock *sk, int bs, struct msghdr *msg) {
 	// It's difficult to use dynamic memory and pointers with eBPF checker,
 	//  hence one big func with goto's, to match underlying assembly structure.
+	struct sock_common *s = &sk->__sk_common;
+	unsigned short af; bpf_probe_read(&af, 2, &s->skc_family);
+	if (af != AF_INET && af != AF_INET6) return;
 
 	// It'd be nice to use skc_cookie for ck key, but it's not pre-generated,
 	//  and bpf_get_socket_cookie can only be triggered from fprobe,
@@ -103,11 +105,7 @@ static __always_inline void conn_update(
 		connp->ns_trx = ns; goto rb_update; }
 
 	struct conn_t conn; // new connection - gather socket/process info
-	struct sock_common *s = &sk->__sk_common;
-	unsigned short af;
-	bpf_probe_read(&af, 2, &s->skc_family);
-	// AF should be filtered by tracepoint arg, so mismatch here means bogus sk
-	if (af != AF_INET && af != AF_INET6) { conn_proc_errs++; return; }
+	u16 proto; bpf_probe_read(&proto, 2, &sk->sk_protocol);
 	conn.ct =
 		proto == IPPROTO_TCP ? (af == AF_INET ? CT_TCP4 : CT_TCP6) :
 		proto == IPPROTO_UDP ? (af == AF_INET ? CT_UDP4 : CT_UDP6) :
@@ -149,34 +147,30 @@ struct sock_data_ctx {
 
 SEC("tracepoint/sock/sock_send_length")
 int tp__sock_send(struct sock_data_ctx *ctx) {
-	if (!(ctx->family == AF_INET || ctx->family == AF_INET6)) return 0;
-	conn_update(ctx->sk, ctx->protocol, ctx->ret > 0 ? ctx->ret : 0, NULL);
-	return 0;
+	if (ctx->family != AF_INET && ctx->family != AF_INET6) return 0;
+	conn_update(ctx->sk, ctx->ret > 0 ? ctx->ret : 0, NULL); return 0;
 }
-
 SEC("tracepoint/sock/sock_recv_length")
 int tp__sock_recv(struct sock_data_ctx *ctx) {
-	if (!(ctx->family == AF_INET || ctx->family == AF_INET6)) return 0;
-	conn_update( ctx->sk, ctx->protocol,
-		((ctx->flags & MSG_PEEK) == 0 && ctx->ret > 0) ? -ctx->ret : 0, NULL );
-	return 0;
+	if (ctx->family != AF_INET && ctx->family != AF_INET6) return 0;
+	conn_update( ctx->sk,
+		((ctx->flags & MSG_PEEK) == 0 && ctx->ret > 0) ? -ctx->ret : 0, NULL ); return 0;
 }
 
-// XXX: use shared security_socket_sendmsg or something instead of these
+
+// sock_sendmsg and such are too generic for this purpose
+// XXX: add similar probes for icmp, icmp_send tracepoint seem to be ipv4-only
 SEC("kprobe/udp_sendmsg")
 int kprobe__udp_sendmsg(struct pt_regs *ctx) {
 	struct sock *sk = (struct sock *) PT_REGS_PARM1(ctx);
 	struct msghdr *msg = (struct msghdr *) PT_REGS_PARM2(ctx);
-	conn_update(sk, IPPROTO_UDP, 0, msg);
-	return 0;
+	conn_update(sk, 0, msg); return 0;
 }
-
 SEC("kprobe/udpv6_sendmsg")
 int kprobe__udpv6_sendmsg(struct pt_regs *ctx) {
 	struct sock *sk = (struct sock *) PT_REGS_PARM1(ctx);
 	struct msghdr *msg = (struct msghdr *) PT_REGS_PARM2(ctx);
-	conn_update(sk, IPPROTO_UDP, 0, msg);
-	return 0;
+	conn_update(sk, 0, msg); return 0;
 }
 
 
