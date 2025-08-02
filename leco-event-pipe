@@ -237,6 +237,7 @@ class BPFMapRingBuffer(BPFMap):
 			self.rb, int(timeout*1000) ) <= 0: return () # timeout/error
 		return tuple(self.updates)
 
+
 def ev_conv_fmt_pid_cmd(comm, pid, cut=16, cache=None, _shebangs=set( '''
 		python python3 java node perl lua php stack ocamlscript nimrun
 		tcl tclsh sh zsh bash nix-shell awk scm guile clisp racket cl sbcl'''.split() )):
@@ -352,6 +353,7 @@ def stream_events(cache, rb, dst, ev_proc, replay_check_pids=False, replay_limit
 					if not stream_events_pid_check(ev.pid): continue
 				if _dst_write(ev_proc(ev), time.monotonic_ns()): return
 			if not ev_fds[0][1] & select.EPOLLIN: break # rb fd closed
+
 
 def main(argv=None):
 	import argparse, textwrap
