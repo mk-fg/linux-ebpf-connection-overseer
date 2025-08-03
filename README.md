@@ -320,7 +320,8 @@ that close within seconds won't really get counted properly.
 
 It doesn't seem to be useful to count couple KiB on those anyway,
 so traffic counters just aren't displayed there to have less visual noise,
-until rx+tx traffic crosses basic 5K threshold.
+until rx+tx traffic crosses basic 5K threshold (configurable via conn-traffic-min
+`-c/--conf` option or env-vars in leco-event-pipe script).
 
 [ebpf.c]: ebpf.c
 

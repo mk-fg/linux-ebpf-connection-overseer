@@ -291,7 +291,8 @@ def ev_conv_fmt_cg(cgid, cg_map, cache=None, cut=20):
 		return cgn
 
 def ev_conv( e, all_data=False, local_ep=False,
-		fmt_cmd=None, fmt_ep=None, fmt_cg=None, cache_uid=None, cache_ts=None ):
+		fmt_cmd=None, fmt_ep=None, fmt_cg=None,
+		traffic_min=5*2**10, cache_uid=None, cache_ts=None ):
 	# XXX: resolve addrs to hosts/asns
 	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
 	if not (cache_ts and (ev_ts := cache_ts.get(e.ns))): # "conn started" time
@@ -309,7 +310,7 @@ def ev_conv( e, all_data=False, local_ep=False,
 	ep_info = fmt_ep(e.raddr, e.rport, e.proto),
 	if local_ep: ep_info = (fmt_ep(e.laddr, e.lport, e.proto),) + ep_info
 	ev.line = ' :: '.join([ ev_ts, u, comm, *ep_info,
-		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' if e.rx + e.tx > 5 * 2**10 else '' ])
+		f'v {sz_repr(e.rx)} / {sz_repr(e.tx)} ^' if e.rx + e.tx >= traffic_min else '' ])
 	if all_data: ev = dict(e, **ev)
 	return ev
 
@@ -367,6 +368,7 @@ def main(argv=None):
 		local-addr-port=0 # add local addr/port endpoint info before remote one
 		cg-label-cut=20 # longer cgroup names are cut to that, like "app-flatpak-net.lut+"
 		script-name-cut=16 # limit detected interpreted script names to this length
+		conn-traffic-min=5120 # min traffic to display on connections - to avoid silly 0 numbers
 		cache-cg-paths=4h # time-delta to forget old cgroup id-name mappings
 		cache-cg-labels=30m # used for displayed short/disambiguated cgroup labels
 		cache-users=4h # time-delta for user id-name cache (from /etc/passwd, nss, etc)
@@ -455,6 +457,7 @@ def main(argv=None):
 			ev_proc=ft.partial( ev_conv,
 				all_data=bool(conf.extra_ev_data), local_ep=bool(conf.local_addr_port),
 				fmt_ep=ev_conv_fmt_ep, fmt_cmd=fmt_cmd, fmt_cg=fmt_cg,
+				traffic_min=conf.conn_traffic_min,
 				cache_uid=TimedCacheDict.optional(conf.cache_users),
 				cache_ts=TimedCacheDict.optional(conf.cache_conn_ts, bump_on_get=False) ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
