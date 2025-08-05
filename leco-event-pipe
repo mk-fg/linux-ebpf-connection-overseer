@@ -292,11 +292,10 @@ def ev_conv_fmt_cg(cgid, cg_map, cache=None, cut=20):
 
 def ev_conv( e, all_data=False, local_ep=False,
 		fmt_cmd=None, fmt_ep=None, fmt_cg=None,
-		traffic_min=5*2**10, cache_uid=None, cache_ts=None ):
-	# XXX: resolve addrs to hosts/asns
+		traffic_min=5*2**10, td_reltime=22.5*3600, cache_uid=None, cache_ts=None ):
 	ev = adict(ns=e.ns, ns_trx=e.ns_trx)
 	if not (cache_ts and (ev_ts := cache_ts.get(e.ns))): # "conn started" time
-		if (td := (time.monotonic_ns() - e.ns) / 1e9) < 81000:
+		if (td := (time.monotonic_ns() - e.ns) / 1e9) < td_reltime:
 			ev_ts = time.strftime('%H:%M', time.localtime(time.time() - td))
 		else: ev_ts = '{:>5s}'.format(td_repr(td, fmt='-{}'))
 		if cache_ts is not None: cache_ts[e.ns] = ev_ts
@@ -369,6 +368,7 @@ def main(argv=None):
 		cg-label-cut=20 # longer cgroup names are cut to that, like "app-flatpak-net.lut+"
 		script-name-cut=16 # limit detected interpreted script names to this length
 		conn-traffic-min=5120 # min traffic to display on connections - to avoid silly 0 numbers
+		use-reltime-after=22h30m # when to start showing relative time instead of daytime
 		cache-cg-paths=4h # time-delta to forget old cgroup id-name mappings
 		cache-cg-labels=30m # used for displayed short/disambiguated cgroup labels
 		cache-users=4h # time-delta for user id-name cache (from /etc/passwd, nss, etc)
@@ -413,7 +413,7 @@ def main(argv=None):
 				continue
 			k, v = m[1].lower().replace(*'-_'), m[2]
 			if not opt:
-				conf_parse[k] = td_parse if re.fullmatch(r'\d+[smhd]', v) else int
+				conf_parse[k] = td_parse if re.search(r'\d+[smhd]$', v) else int
 				if ev := os.environ.get(f'leco_{k}'.upper()): v = ev
 			elif k not in conf: parser.error(f'Unrecognized option {k!r} in {line!r}')
 			conf[k] = conf_parse[k](v)
@@ -457,11 +457,10 @@ def main(argv=None):
 			ev_proc=ft.partial( ev_conv,
 				all_data=bool(conf.extra_ev_data), local_ep=bool(conf.local_addr_port),
 				fmt_ep=ev_conv_fmt_ep, fmt_cmd=fmt_cmd, fmt_cg=fmt_cg,
-				traffic_min=conf.conn_traffic_min,
+				traffic_min=conf.conn_traffic_min, td_reltime=conf.use_reltime_after,
 				cache_uid=TimedCacheDict.optional(conf.cache_users),
 				cache_ts=TimedCacheDict.optional(conf.cache_conn_ts, bump_on_get=False) ))
 		if not opts.fifo: return stream_events(dst=sys.stdout, **stream_kws)
-		# XXX: support sending to multiple receivers
 		while dst := open(os.open(opts.fifo, os.O_WRONLY), 'w'):
 			try: stream_events(dst=dst, **stream_kws)
 			finally:
