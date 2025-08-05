@@ -595,7 +595,7 @@ method row_draw(o: Painter, row: PaintedRow, cleanup: bool) =
 		let cx = if row.replaced: 0 else: x + o.uid_w
 		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
 		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
-		o.rdr.RenderFillRect(cx, y, o.tw - cx, o.conf.line_h)
+		o.rdr.RenderFillRect(cx, y, o.tw - cx, o.conf.line_h + o.conf.font_shadow_pad)
 	y += o.oy
 	if row.replaced:
 		o.txt.SetTextString(row.uid)
