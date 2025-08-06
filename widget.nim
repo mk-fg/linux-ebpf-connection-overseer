@@ -35,8 +35,9 @@ type Conf = ref object
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
-	line_fade_ns: int64 = 60 * 1_000_000_000
 	line_fade_curve = (y0: 0.0, y1: 100.0, points: @[0.0, 100.0, 100.0, 0.0])
+	line_fade_ns: int64 = 60 * 1_000_000_000
+	line_fade_fps = 30 # determines how many points to pre-calculate on the curve
 	color_bg = Color(r:0, g:0x0c, b:0x08, a:0x66)
 	color_fg = Color(r:0xff, g:0xff, b:0xff, a:0xff)
 	run_fifo = "/run/user/1000/leco.fifo"
@@ -327,8 +328,8 @@ proc parse_conf_file(conf_path: string): Conf =
 					if val.contains("."): conf_text_hx = val.parse_float
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
 					else: conf_text_hx = val.parse_float * -1
-				of "line-fade-time": conf.line_fade_ns = int64(val.parse_float * 1e9)
 				of "line-fade-curve": conf.line_fade_curve = val.parse_curve
+				of "line-fade-time": conf.line_fade_ns = int64(val.parse_float * 1e9)
 				of "line-uid-chars": conf.line_uid_chars = val.parse_int
 				of "line-uid-fmt": conf.line_uid_fmt = val
 				else: section_val_unknown
@@ -376,6 +377,7 @@ var # updated from fifo-conn-reader thread to use by NetConns
 
 proc conn_reader_rx_repl( conn: var ConnInfo,
 		rx_group: seq[RX], rx_proc: seq[RX] ): bool {.gcsafe.} =
+	## Replaces conn.line and sets conn.group according to configured regexps.
 	var rr: RXRepl
 	for rx in rx_group:
 		rr = rx.replace(conn.line)
@@ -504,7 +506,7 @@ type
 		replaced = true
 
 proc `<`(a, b: PaintedRow): bool =
-	## Used to pick "oldest" row to replace visually.
+	## Used for sorting rows to pick "oldest" one to replace visually.
 	## Ones not "listed" in conn_list are replaced before ones that still are.
 	if a.listed and not b.listed: false
 	elif b.listed and not a.listed: true
@@ -512,6 +514,8 @@ proc `<`(a, b: PaintedRow): bool =
 	else: a.ns < b.ns
 
 method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
+	## Returns seq[td_ns, alpha] of evenly-spaced fade-curve alpha values.
+	## Number of values is calculated as line_fade_ns * line_fade_fps.
 	let
 		pts = o.conf.line_fade_curve.points
 		y0 = o.conf.line_fade_curve.y0
@@ -525,7 +529,8 @@ method init_fade_timeline(o: var Painter): seq[(int64, byte)] =
 		s: tsBSpline
 		st: tsStatus
 		samples_ptr: ptr UncheckedArray[cdouble]
-		samples_n = csize_t((o.conf.line_fade_ns div 1_000_000) div 30) # ~30fps
+		samples_n = csize_t(
+			(o.conf.line_fade_ns div 1_000_000_000) * o.conf.line_fade_fps )
 		a0: byte
 	defer: dealloc(points_ptr)
 	for n in 0 ..< pts.len: points[n] = pts[n] # seq -> array
@@ -589,33 +594,6 @@ method row_uid(o: Painter, ns: CNS): (string, Color) =
 		uid_color = Color(r:uid_str[0].byte, g:uid_str[1].byte, b:uid_str[2].byte, a:255)
 	return (uid, uid_color)
 
-method row_draw(o: Painter, row: PaintedRow, cleanup: bool) =
-	var x = o.conf.win_px; var y = o.conf.win_py + row.n * o.conf.line_h
-	o.rdr.SetRenderTarget(o.tex)
-	if cleanup:
-		var cx = 0; var cw = o.tw
-		if not row.replaced: # keep uid on the left
-			cx = x + o.uid_w - o.conf.font_shadow_pad.left
-			cw -= cx; cw += o.conf.font_shadow_pad.left
-		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
-		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
-		o.rdr.RenderFillRect(cx, y, cw, o.conf.line_h + o.conf.font_shadow_pad.down)
-	y += o.oy
-	if row.replaced:
-		o.txt.SetTextString(row.uid)
-		for xyc in o.conf.font_shadow:
-			o.txt.SetTextColor(xyc.c)
-			o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
-		o.txt.SetTextColor(row.uid_color)
-		o.txt.DrawRendererText(x, y)
-	x += o.uid_w
-	o.txt.SetTextString(row.line)
-	for xyc in o.conf.font_shadow:
-		o.txt.SetTextColor(xyc.c)
-		o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
-	o.txt.SetTextColor(o.conf.color_fg)
-	o.txt.DrawRendererText(x, y)
-
 method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 	## Returns updated/replaced rows that need to be repainted.
 	## For new conns, replaces oldest rows without a matching conn first.
@@ -646,10 +624,40 @@ method row_updates(o: var Painter, ts: int64): seq[PaintedRow] =
 		(r.uid, r.uid_color) = o.row_uid(conn.ns)
 		o.rows[conn.ns] = r; result.add r
 
+method row_draw(o: Painter, row: PaintedRow, cleanup: bool) =
+	## (Re-)draw specified row on a texture, cleaning-up old one in that place.
+	## Row is composed of colored UID in the left column + main text line.
+	## Font shadow/outline is just same text copied in layers with offsets/colors.
+	var x = o.conf.win_px; var y = o.conf.win_py + row.n * o.conf.line_h
+	o.rdr.SetRenderTarget(o.tex)
+	if cleanup:
+		var cx = 0; var cw = o.tw
+		if not row.replaced: # keep uid on the left
+			cx = x + o.uid_w - o.conf.font_shadow_pad.left
+			cw -= cx; cw += o.conf.font_shadow_pad.left
+		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
+		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
+		o.rdr.RenderFillRect(cx, y, cw, o.conf.line_h + o.conf.font_shadow_pad.down)
+	y += o.oy
+	if row.replaced:
+		o.txt.SetTextString(row.uid)
+		for xyc in o.conf.font_shadow:
+			o.txt.SetTextColor(xyc.c)
+			o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
+		o.txt.SetTextColor(row.uid_color)
+		o.txt.DrawRendererText(x, y)
+	x += o.uid_w
+	o.txt.SetTextString(row.line)
+	for xyc in o.conf.font_shadow:
+		o.txt.SetTextColor(xyc.c)
+		o.txt.DrawRendererText(x + xyc.x, y + xyc.y)
+	o.txt.SetTextColor(o.conf.color_fg)
+	o.txt.DrawRendererText(x, y)
+
 method draw(o: var Painter): bool =
 	## Clear/update window contents buffer, returns true if there are any changes.
 	## Maintains single texture with all text lines in the right places,
-	##   and copies those to window with appropriate effects applied per-frame.
+	##  and copies those to window with appropriate effects applied per-frame.
 	let ts = get_mono_time().ticks; let new_texture = o.check_texture()
 
 	# Update any new/changed rows on the texture
@@ -843,7 +851,6 @@ proc main(argv: seq[string]) =
 			while sdl.PollEvent(ev): ev_proc
 			if ev_upd: break
 		if paint.draw(): sdl_update_set()
-
 		if not sdl_update_check(ts_render): continue
 		let td = conf.win_upd_ns - (get_mono_time().ticks - ts_render)
 		if td > 0: sleep(td div 1_000 - 1) # vsync-independent frame delay
