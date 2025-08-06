@@ -31,7 +31,7 @@ type Conf = ref object
 	font_file = ""
 	font_h = 14
 	font_shadow: seq[tuple[x: int, y: int, c: Color]]
-	font_shadow_pad = 0 # auto-calculated from font_shadow values
+	font_shadow_pad = (left: 0, down: 0) # auto-calculated from font_shadow values
 	line_h = 0 # to be calculated
 	line_uid_chars = 3
 	line_uid_fmt = "#$1"
@@ -243,7 +243,8 @@ proc parse_conf_file(conf_path: string): Conf =
 		if v.len == 4:
 			for n in 0 .. 3: v.add v[n]; v.add v[n]
 			v = v.substr(4)
-		if v.len != 8: raise ValueError.new_exception("rgba: color should be 4 or 8 hex-digits")
+		if v.len != 8: raise ValueError
+			.new_exception("rgba: color should be 4 or 8 hex-digits")
 		let c = v.from_hex[:uint32]
 		return Color( r: uint8((c shr 24) and 0xff),
 			g: uint8((c shr 16) and 0xff), b: uint8((c shr 8) and 0xff), a: uint8(c and 0xff) )
@@ -315,13 +316,13 @@ proc parse_conf_file(conf_path: string): Conf =
 					for s in val.split(' '):
 						if s == "": continue
 						let xyc = s.split(',')
-						if xyc.len == 2: conf.font_shadow.add (
-							xyc[0].parse_int, xyc[1].parse_int, Color(r:0, g:0, b:0, a:0xff) )
-						elif xyc.len == 3: conf.font_shadow.add (
-							xyc[0].parse_int, xyc[1].parse_int, xyc[2].parse_color )
-						else: raise ValueError.new_exception(
-							&"Unrecognized font-shadow tuple format [ {s} ]" )
-						conf.font_shadow_pad = max(conf.font_shadow_pad, xyc[1].parse_int)
+						if xyc.len < 2 or xyc.len > 3: raise ValueError
+							.new_exception(&"Unrecognized font-shadow tuple format [ {s} ]")
+						let x = xyc[0].parse_int; let y = xyc[1].parse_int
+						if xyc.len == 2: conf.font_shadow.add (x, y, Color(r:0, g:0, b:0, a:0xff))
+						elif xyc.len == 3: conf.font_shadow.add (x, y, xyc[2].parse_color)
+						conf.font_shadow_pad.left = max(conf.font_shadow_pad.left, -x)
+						conf.font_shadow_pad.down = max(conf.font_shadow_pad.down, y)
 				of "line-height":
 					if val.contains("."): conf_text_hx = val.parse_float
 					elif val.startswith("+"): conf_text_gap = val[1 .. ^1].parse_int
@@ -592,10 +593,13 @@ method row_draw(o: Painter, row: PaintedRow, cleanup: bool) =
 	var x = o.conf.win_px; var y = o.conf.win_py + row.n * o.conf.line_h
 	o.rdr.SetRenderTarget(o.tex)
 	if cleanup:
-		let cx = if row.replaced: 0 else: x + o.uid_w
+		var cx = 0; var cw = o.tw
+		if not row.replaced: # keep uid on the left
+			cx = x + o.uid_w - o.conf.font_shadow_pad.left
+			cw -= cx; cw += o.conf.font_shadow_pad.left
 		o.rdr.SetRenderDrawBlendMode(sdl.BLENDMODE_NONE)
 		o.rdr.SetRenderDrawColor(0, 0, 0, 0)
-		o.rdr.RenderFillRect(cx, y, o.tw - cx, o.conf.line_h + o.conf.font_shadow_pad)
+		o.rdr.RenderFillRect(cx, y, cw, o.conf.line_h + o.conf.font_shadow_pad.down)
 	y += o.oy
 	if row.replaced:
 		o.txt.SetTextString(row.uid)
@@ -675,7 +679,8 @@ method draw(o: var Painter): bool =
 			result = true
 		let alpha = o.fade_out[row.fade_out_n][1]
 		if alpha == 0: continue
-		var y = row.n * o.conf.line_h; var h = o.conf.line_h + o.conf.font_shadow_pad
+		var y = row.n * o.conf.line_h
+		var h = o.conf.line_h + o.conf.font_shadow_pad.down
 		if row.n > 0: y += o.conf.win_py else: h += o.conf.win_py
 		o.tex.SetTextureAlphaMod(alpha)
 		o.rdr.RenderTexture(o.tex, 0, y, o.tw, h, 0, y, o.tw, h)
