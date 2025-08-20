@@ -1,10 +1,11 @@
 Linux eBPF Connection Overseer
 ==============================
 
-Network monitoring tool to display info about new/active connections on linux desktop,
-with enough associated process/cgroup information to easily tell what those might
-be from/about, as well as some traffic counters, in a way similar to [conky] tool
-(i.e. over desktop background or in a transparent overlay window).
+Network monitoring tool to display info about new/active app connections
+on linux desktop, with enough associated process/cgroup information
+to easily tell what those might be about and some traffic counters,
+displayed in a way similar to [conky] tool (i.e. over desktop background
+or in a transparent overlay window).
 
 Focus is to be useful in the same way conky is - be able to check what's going on
 at a glance, easily spotting something new or unusual, with enough configurability
@@ -422,12 +423,15 @@ It's working fine for me as it is, but there's always plenty of room for improve
 <a name=hdr-links></a>
 # Links
 
+- [Blog post about this app] with some extra info.
 - [OpenSnitch] - GUI for interactive firewall setup when new connections are detected.
 - [netatop-bpf] - eBPF-based extension for [atop tool] to display per-process network traffic.
 - [Qtap] - much more powerful eBPF network-monitoring "agent" to even monitor encrypted connections.
 - [systemd-cgroup-nftables-policy-manager] - user-session cgroup-based firewall configuration helper.
 - [cgroup-skb.nonet.c] - very simple eBPF to block per-cgroup egress network access.
 
+[Blog post about this app]:
+  https://blog.fraggod.net/2025/08/20/modern-conky-like-ambient-network-connection-monitoring-tool.html
 [Qtap]: https://qpoint.io/qtap
 [atop tool]: https://www.atoptool.nl/
 [systemd-cgroup-nftables-policy-manager]:
