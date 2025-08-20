@@ -233,9 +233,7 @@ proc parse_conf_file(conf_path: string): Conf =
 		log_debug(&"line-fade-curve: parsed point values = {points}")
 		if points.len %% 2 != 0: raise ValueError.new_exception(
 			"line-fade-curve: odd number of x-y values, must be even" )
-		if a == 0 and b == 0:
-			a = points[1]; b = points[^1]
-			if a > b: a = b; b = a
+		if a == 0 and b == 0: a = points[^1]; b = points[1]
 		result = (y0: a, y1: b, points: points)
 		log_debug(&"line-fade-curve: final shape {result}")
 

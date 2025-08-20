@@ -413,7 +413,7 @@ def main(argv=None):
 				continue
 			k, v = m[1].lower().replace(*'-_'), m[2]
 			if not opt:
-				conf_parse[k] = td_parse if re.search(r'\d+[smhd]$', v) else int
+				conf_parse[k] = td_parse if re.search(r'\d+([smhd]$|:)', v) else int
 				if ev := os.environ.get(f'leco_{k}'.upper()): v = ev
 			elif k not in conf: parser.error(f'Unrecognized option {k!r} in {line!r}')
 			conf[k] = conf_parse[k](v)
