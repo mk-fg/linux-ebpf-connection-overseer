@@ -1,5 +1,5 @@
 # Should be enabled/started with uid of a desktop user (typically 1000)
-#   as an instance value (after @), for example: system enable leco@1000
+#   as an instance value (after @), for example: systemctl enable leco@1000
 # Uses fifo socket in XDG_RUNTIME_DIR - /run/user/<uid>/leco.fifo
 
 [Unit]
@@ -14,7 +14,7 @@ FileDescriptorStoreMax=32
 
 BindPaths=/run/user/%i/leco.fifo:/run/leco.fifo
 
-# ExecStartPre= has issues tracking fds, so --pin in required here
+# ExecStartPre= has issues tracking fds, so --pin is required here
 # See https://github.com/systemd/systemd/issues/37192 for details
 ExecStartPre=+leco-ebpf-load -p /sys/fs/bpf/leco --pin-fdstore
 ExecStart=leco-event-pipe -f /run/leco.fifo
@@ -22,7 +22,7 @@ ExecStart=leco-event-pipe -f /run/leco.fifo
 # Generic systemd sandboxing options
 DynamicUser=yes
 ProcSubset=pid
-# ProtectProc=invisible - to allow cache-pid-cmd lookups
+# ProtectProc=invisible - to allow "cache pid command" lookups there
 ProtectHome=yes
 PrivateDevices=yes
 PrivateUsers=yes

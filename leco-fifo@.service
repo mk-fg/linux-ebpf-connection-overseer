@@ -1,5 +1,5 @@
 # Creates fifo socket for leco@.service under specific uid's XDG_RUNTIME_DIR.
-# Must be done separately for BindPath= sandboxing setup in leco@.service to work.
+# Must be done separately, for BindPath= sandboxing setup in leco@.service to work.
 
 [Unit]
 Wants=user-runtime-dir@%i.service
