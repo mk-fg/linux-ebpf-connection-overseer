@@ -143,7 +143,7 @@ More specifically:
     Will not work with older SDL 1.x and 2.x library branches (different API).
 
     `git submodule init && git submodule update` needs to be run first
-    to fetch tinyspline build-time dependency library.\
+    to fetch tinyspline build-time dependency library.
     Can be built separately using `make leco-sdl-widget` command, ~400K binary.
 
 Running `make` without parameters includes building all these components.
@@ -170,8 +170,8 @@ there should be following output files for two general parts:
   `leco-event-pipe` + `leco@.service` + `leco-fifo@.service`
 
     Install binaries into PATH somewhere, and .service files to
-    `/etc/systemd/system`, then enable/start it desktop user's uid as an
-    instance name (as in `id -u`, often 1000): `systemctl enable --now leco@1000`
+    `/etc/systemd/system`, then enable/start it with desktop user's uid as an
+    instance name (uid as in `id -u`, often 1000): `systemctl enable --now leco@1000`
 
     Run `leco-event-pipe` with `-h/--help` for a list of options, which can be
     customized using environment variables, added via e.g. `systemctl edit leco@`
@@ -343,9 +343,9 @@ counted/displayed, as it doesn't pass through those send/recv syscalls, which me
 that new/idle connections are ignored, until app sends/receives some data there.
 
 All network traffic generated or forwarded by linux kernel internally is ignored as well -
-there's no send/recv syscalls involved there. This includes traffic of in-kernel network
+there're no send/recv syscalls involved there. This includes traffic of in-kernel network
 filesystems like NFS, CIFS, Ceph, or e.g. encrypted UDP packets of WireGuard tunnels.
-If host works as a router, moving traffic between interfaces, that's not detected/displayed
+If host works as a router moving traffic between interfaces, that's not detected/displayed
 either, use network flow monitoring tools for that.
 
 Traffic of address families other than AF\_INET / AF\_INET6 might be passing through
@@ -366,8 +366,9 @@ if for example network address translation (NAT) is setup in a local firewall.
 Arbitrary traffic constructed on type=SOCK_RAW sockets doesn't have any "connection"
 information recorded in kernel, so shows up with remote addr=0.0.0.0 port=0 atm.
 
-To summarize again: eBPF hooks here detect and count userspace applications
-sending/receiving data via any IPv4/IPv6 sockets, not any interface/forwarded traffic.
+To summarize: eBPF hooks here detect and count userspace applications attempting to
+send or receiving data via any IPv4/IPv6 sockets, which might not be same as actual
+network/interface traffic, and don't count kernel-initiated or forwarded traffic at all.
 
 [send()]: https://man.archlinux.org/man/send.2
 [recv()]: https://man.archlinux.org/man/recv.2
@@ -380,8 +381,9 @@ It's working fine for me as it is, but there's always plenty of room for improve
 
 - Unfinished and minor stuff.
 
-    - widget: +1 fade curve for lingering connections, with timeout, setting cap on alpha.
+    - widget: +1 fade curve for lingering connections, with configurable rgba-mod/timespan.
     - widget: effects for new/faded conns added to the list (glow/blur, slide, etc).
+    - widget: custom colors/curves selectable by regexp matches.
     - ebpf: add kprobes to update icmp destination addresses.
     - Some distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
 
@@ -427,12 +429,14 @@ It's working fine for me as it is, but there's always plenty of room for improve
 - [OpenSnitch] - GUI for interactive firewall setup when new connections are detected.
 - [netatop-bpf] - eBPF-based extension for [atop tool] to display per-process network traffic.
 - [Qtap] - much more powerful eBPF network-monitoring "agent" to even monitor encrypted connections.
+- [oryx] - eBPF-based wireshark-like TUI for inspecting/firewalling real-time network traffic.
 - [systemd-cgroup-nftables-policy-manager] - user-session cgroup-based firewall configuration helper.
 - [cgroup-skb.nonet.c] - very simple eBPF to block per-cgroup egress network access.
 
 [Blog post about this app]:
   https://blog.fraggod.net/2025/08/20/modern-conky-like-ambient-network-connection-monitoring-tool.html
 [Qtap]: https://qpoint.io/qtap
+[oryx]: https://github.com/pythops/oryx
 [atop tool]: https://www.atoptool.nl/
 [systemd-cgroup-nftables-policy-manager]:
   https://github.com/mk-fg/systemd-cgroup-nftables-policy-manager
