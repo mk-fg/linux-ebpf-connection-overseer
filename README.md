@@ -387,11 +387,20 @@ It's working fine for me as it is, but there's always plenty of room for improve
     - ebpf: add kprobes to update icmp destination addresses.
     - Some distinction for in/out conns (accept/recvmsg vs connect/sendmsg).
 
-- Fetch DNS/ASN info for addresses via separate API, from e.g. local resolver.
+- Fetch DNS info for addresses via separate API, from e.g. local resolver.
 
     Idea is to reverse-query local unbound cache, to return last name that
     resulted in it returning specified IP, which should work for all local apps,
     incl. ones using such resolver via DoH protocol.
+
+- Show RIPE/ASN network info from local databases.
+
+    [nft-set-to-ranges] script has implementation for some of this.
+
+- Add option to use icons from a separate emoji-font using regexps, instead of UIDs.
+
+    Should track same known things better than UID hashes on the left,
+    be more consistent, and more distinctive at a glance due to different shapes.
 
 - Send events from pipe to multiple receivers.
 
@@ -420,6 +429,9 @@ It's working fine for me as it is, but there's always plenty of room for improve
     With current tracking, connect() should fail and TCP ones won't be displayed,
     while UDP sockets might show (mostly) one-sided traffic (if recv works, blocked
     send attempts will still be counted too).
+
+[nft-set-to-ranges]:
+  https://github.com/mk-fg/fgtk/blob/master/scraps/nft-set-to-ranges
 
 
 <a name=hdr-links></a>
