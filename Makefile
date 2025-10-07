@@ -66,7 +66,7 @@ clean:
 .SUFFIXES:
 
 
-# leco-ebpf-load: libbpf + bpftool
+# leco-ebpf-load: libbpf, bpftool, sd-daemon
 
 build build/libbpf build/bpftool:
 	mkdir -p $@
@@ -81,6 +81,10 @@ build/libbpf.a: $(wildcard libbpf/src/*.[ch] libbpf/src/Makefile) | build/libbpf
 build/bpftool/bootstrap/bpftool: | build/bpftool bpftool/libbpf/src
 	$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=../../build/bpftool/ -C bpftool/src bootstrap
 
+build/sd-daemon/libsd-daemon.a: $(wildcard sd-daemon/*.[ch] sd-daemon/configure sd-daemon/*.in)
+	cp -r sd-daemon/. build/sd-daemon
+	cd build/sd-daemon && ./configure && $(MAKE)
+
 
 # leco-ebpf-load - .bc -> .o -> .skel.h -> wrapper binary
 
@@ -94,8 +98,10 @@ build/ebpf.o: build/ebpf.bc $(wildcard build/bpf/*.[ch]) | build
 build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
 	./build/bpftool/bootstrap/bpftool gen skeleton $< > $@
 
-leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
-	$(CC) $< build/libbpf.a $(BIN_CFLAGS) $(BIN_LDFLAGS) -lelf -lz -lsystemd -o $@
+leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a build/sd-daemon/libsd-daemon.a
+	$(CC) $< \
+		-Ibuild/sd-daemon build/libbpf.a build/sd-daemon/libsd-daemon.a \
+		$(BIN_CFLAGS) $(BIN_LDFLAGS) -lelf -lz -o $@
 	$(BIN_STRIP) $@
 
 
@@ -104,12 +110,14 @@ leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
 build/tinyspline:
 	mkdir -p $@
 
-build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspline/src/CMakeLists.txt) | build/tinyspline
+build/tinyspline/lib/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspline/src/CMakeLists.txt) | build/tinyspline
 	$(CMAKE) -B build/tinyspline \
 		-DTINYSPLINE_BUILD_TESTS=False -DTINYSPLINE_ENABLE_CXX=False \
 		-DTINYSPLINE_BUILD_DOCS=False -DTINYSPLINE_BUILD_EXAMPLES=False \
 		-DCMAKE_INSTALL_PREFIX=build/tinyspline tinyspline
 	$(CMAKE) --build build/tinyspline --target install
+
+build/tinyspline/include/tinyspline.h: build/tinyspline/lib/libtinyspline.a
 
 
 # leco-sdl-widget and its config file
@@ -117,7 +125,7 @@ build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspl
 leco-sdl-widget.ini: widget.ini
 	$(SED) 's/^[^#[]/#\0/' $< > $@
 
-leco-sdl-widget: widget.nim build/tinyspline/lib64/libtinyspline.a build/tinyspline/include/tinyspline.h
+leco-sdl-widget: widget.nim build/tinyspline/lib/libtinyspline.a build/tinyspline/include/tinyspline.h
 	$(NIM) c -p=nsdl3 -d:release -d:strip -d:lto_incremental --opt:speed -o=leco-sdl-widget $<
 
 

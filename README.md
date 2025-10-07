@@ -101,8 +101,9 @@ In short:
 
 - Build-only dependencies/tools: [cmake], [make], [llvm], [clang], [Nim].
 
-- Runtime dependencies: [python], [libbpf], [SDL3], [SDL3_ttf],
-  linux 6.3+ kernel with eBPF, kprobes and tracepoints enabled.
+- Runtime dependencies: libc (tested with [glibc]), [elfutils], [zlib],
+  [python], [libbpf], [SDL3], [SDL3_ttf], linux 6.3+ kernel with eBPF,
+  kprobes and tracepoints enabled.
 
 - Outputs: `leco-ebpf-load`, `leco-event-pipe`, `leco-sdl-widget`, `leco-sdl-widget.ini`
 
@@ -111,6 +112,9 @@ In short:
 Run `git submodule init && git submodule update && make` to build all output files as-needed.
 
 More specifically:
+
+- Basic system dependencies like libc (e.g. [glibc]), [elfutils] and [zlib] are
+  needed for build and at runtime. Usually present in any regular linux distro/setup.
 
 - [leco-ebpf-load] loader-binary requires [make], [clang] and [llvm] tools,
   as well as kernel headers (e.g. kernel-devel package) to build it.
@@ -130,13 +134,13 @@ More specifically:
     (which can be enabled via `BPF_SYSCALL` + `FTRACE` + `KPROBE_EVENTS`)
 
     Run `git submodule init && git submodule update` first to fetch
-    libbpf/bpftool build-dependencies. `make leco-ebpf-load` command
-    can be used to build only this `leco-ebpf-load` eBPF-loader binary (~350K).
+    libbpf/bpftool/sd-daemon build-dependencies. `make leco-ebpf-load` command
+    can be used to build only this `leco-ebpf-load` eBPF-loader binary (~400K).
 
 - [leco-event-pipe] script requires [python] (with ctypes) and [libbpf] installed,
-  uses fds/pins created by `leco-ebpf-load`, that should be ran before it.
+  uses fds/pins created by `leco-ebpf-load`, that should be run before it.
 
-- [leco-sdl-widget] requires [Nim] and [cmake] (to build [tinyspline] submodule),
+- [leco-sdl-widget] requires [Nim], [make] and [cmake] (to build [tinyspline] submodule),
   and only [SDL3] + [SDL3_ttf] (Simple DirectMedia Layer 3.x) libraries installed
   on the system in order to run.
 
@@ -153,6 +157,9 @@ Running `make` without parameters includes building all these components.
 [clang]: https://clang.llvm.org/
 [llvm]: https://llvm.org/
 [Nim]: https://nim-lang.org/
+[glibc]: https://www.gnu.org/software/libc
+[elfutils]: https://sourceware.org/elfutils/
+[zlib]: https://www.zlib.net/
 [python]: https://www.python.org/
 [libbpf]: https://github.com/libbpf/libbpf
 [SDL3]: https://libsdl.org/

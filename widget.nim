@@ -66,7 +66,7 @@ conf_win_hints["no_signal_handlers"] = sdl.HINT_NO_SIGNAL_HANDLERS
 
 
 {.passl: "-lm"}
-{.passl: "build/tinyspline/lib64/libtinyspline.a"}
+{.passl: "build/tinyspline/lib/libtinyspline.a"}
 type
 	tsBSpline {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
 	tsStatus {.importc, header:"build/tinyspline/include/tinyspline.h".} = object
