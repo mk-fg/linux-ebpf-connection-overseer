@@ -66,7 +66,7 @@ clean:
 .SUFFIXES:
 
 
-# libbpf + bpftool
+# leco-ebpf-load: libbpf + bpftool
 
 build build/libbpf build/bpftool:
 	mkdir -p $@
@@ -82,7 +82,7 @@ build/bpftool/bootstrap/bpftool: | build/bpftool bpftool/libbpf/src
 	$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=../../build/bpftool/ -C bpftool/src bootstrap
 
 
-# .bc -> .o -> .skel.h -> wrapper binary
+# leco-ebpf-load - .bc -> .o -> .skel.h -> wrapper binary
 
 build/ebpf.bc: ebpf.c | build build/libbpf.a
 	$(CC) $(EBPF_CFLAGS) -c -o $@ $<
@@ -99,7 +99,7 @@ leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a
 	$(BIN_STRIP) $@
 
 
-# nim leco-sdl-widget UI-tool
+# leco-sdl-widget: tinyspline dependency
 
 build/tinyspline:
 	mkdir -p $@
@@ -110,6 +110,9 @@ build/tinyspline/lib64/libtinyspline.a: $(wildcard tinyspline/src/*.[ch] tinyspl
 		-DTINYSPLINE_BUILD_DOCS=False -DTINYSPLINE_BUILD_EXAMPLES=False \
 		-DCMAKE_INSTALL_PREFIX=build/tinyspline tinyspline
 	$(CMAKE) --build build/tinyspline --target install
+
+
+# leco-sdl-widget and its config file
 
 leco-sdl-widget.ini: widget.ini
 	$(SED) 's/^[^#[]/#\0/' $< > $@
