@@ -267,7 +267,8 @@ def ev_conv_fmt_ep(addr, port, proto):
 def ev_conv_fmt_cg(cgid, cg_map, cache=None, cut=20):
 	'Resolves, cuts down, disambiguates and caches cgroup names'
 	if not (cgp0 := cg_map.get(cgid)): return
-	if cache and (cgn := cache.get(cgp0)): return cgn
+	if cache is None: cache = dict()
+	if cgn := cache.get(cgp0): return cgn
 	cgs, cgp, cgns = '', cgp0, list()
 	cgsx = lambda n: re.sub(r'.(service|scope|slice)$', '', n)
 	while True:
@@ -281,13 +282,13 @@ def ev_conv_fmt_cg(cgid, cg_map, cache=None, cut=20):
 				s += chars[n]
 				if (cgn := f'{cgns[0][:cut-2]}.{s}') not in cache: break
 		else: cgns.append(cgn)
-		if (cgp1 := cache and cache.get(cgn)) and cgp1 != cgp0: # same-label conflict
+		if (cgp1 := cache.get(cgn)) and cgp1 != cgp0: # same-label conflict
 			ps = tuple(map(cgsx, [cgp1, cgp0]))
 			if suff := os.path.commonpath(p[::-1] for p in ps): cgp = ps[-1][:-len(suff)-1]
 			cgs = f'/{cgn}'
 			if '/' in suff: cgs = f'/{cgs}'
 			continue
-		if isinstance(cache, dict) and not cgp1: cache[cgn], cache[cgp0] = cgp0, cgn
+		if not cgp1: cache[cgn], cache[cgp0] = cgp0, cgn
 		return cgn
 
 def ev_conv( e, all_data=False, local_ep=False,
