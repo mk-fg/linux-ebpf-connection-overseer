@@ -101,9 +101,9 @@ In short:
 
 - Build-only dependencies/tools: [cmake], [make], [llvm], [clang], [Nim].
 
-- Runtime dependencies: libc (tested with [glibc]), [elfutils], [zlib],
-  [python], [libbpf], [SDL3], [SDL3_ttf], linux 6.3+ kernel with eBPF,
-  kprobes and tracepoints enabled.
+- Runtime dependencies (for all components): libc (tested with [glibc]),
+  [libelf], [zlib], [python], [libbpf], [SDL3], [SDL3_ttf], linux 6.3+ kernel
+  with eBPF, kprobes and tracepoints enabled.
 
 - Outputs: `leco-ebpf-load`, `leco-event-pipe`, `leco-sdl-widget`, `leco-sdl-widget.ini`
 
@@ -113,8 +113,9 @@ Run `git submodule init && git submodule update && make` to build all output fil
 
 More specifically:
 
-- Basic system dependencies like libc (e.g. [glibc]), [elfutils] and [zlib] are
-  needed for build and at runtime. Usually present in any regular linux distro/setup.
+- Basic system dependencies like libc (e.g. [glibc]), [libelf] and [zlib] are
+  needed for build and at runtime. Usually present in any regular linux distro/setup,
+  and are also runtime dependencies of [libbpf].
 
 - [leco-ebpf-load] loader-binary requires [make], [clang] and [llvm] tools,
   as well as kernel headers (e.g. kernel-devel package) to build it.
@@ -158,7 +159,7 @@ Running `make` without parameters includes building all these components.
 [llvm]: https://llvm.org/
 [Nim]: https://nim-lang.org/
 [glibc]: https://www.gnu.org/software/libc
-[elfutils]: https://sourceware.org/elfutils/
+[libelf]: https://sourceware.org/elfutils/
 [zlib]: https://www.zlib.net/
 [python]: https://www.python.org/
 [libbpf]: https://github.com/libbpf/libbpf
