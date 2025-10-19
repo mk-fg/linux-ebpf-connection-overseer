@@ -95,7 +95,7 @@ int main(int argc, char **argv) {
 		else if (fd_n > 0) {
 			P("sd_listen_fds version mismatch, re-initializing eBPFs");
 			for (n = 0; n < fd_n; n++)
-				if (sd_notifyf( false, "FDSTOREREMOVE=1\nFDNAME=%s",
+				if (sd_notifyf( false, "FDSTOREREMOVE=1\nFDNAME=%s\n",
 						fd_names[n] ) <= 0 || close(SD_LISTEN_FDS_START + n))
 					E(1, "sd_listen_fds fd-cleanup failed [ %s ]", fd_names[n]); } }
 
@@ -141,7 +141,7 @@ int main(int argc, char **argv) {
 				fd = bpf_link__fd(link); // link-fd should keep program around as well
 				P("Storing program-link fd #%d %d [ %s ]", n, fd, name);
 				if (sd_pid_notifyf_with_fds( 0, false, &fd, 1,
-						"FDSTORE=1\nFDPOLL=0\nFDNAME=%s__v%d", name, fd_version ) <= 0) {
+						"FDSTORE=1\nFDPOLL=0\nFDNAME=%s__v%d\n", name, fd_version ) <= 0) {
 					EC("sd_notify fdstore failed for prog-link #%d [ %s ]", n, name); } }
 			else if (snprintf( pin, 1024, "%s/%s__v%d",
 					opt_pin_links, name, fd_version ) <= 0 || bpf_link__pin(link, pin) )
@@ -154,7 +154,7 @@ int main(int argc, char **argv) {
 				n++; name = bpf_map__name(map); fd = bpf_map__fd(map);
 				P("Storing map fd #%d %d [ %s ]", n, fd, name);
 				if (sd_pid_notifyf_with_fds( 0, false, &fd, 1,
-						"FDSTORE=1\nFDPOLL=0\nFDNAME=%s_v%d", name, fd_version ) <= 0)
+						"FDSTORE=1\nFDPOLL=0\nFDNAME=%s_v%d\n", name, fd_version ) <= 0)
 					EC("sd_notify fdstore failed for map #%d [ %s ]", n, name); } } }
 
 	// Clear/store only specific non-versioned maps with --pin-fdstore option
@@ -163,10 +163,10 @@ int main(int argc, char **argv) {
 		for (n = 0; n < 2; n++) {
 			snprintf(pin, 1024, "%s/%s", opt_pin_maps, name = pin_objs[n]);
 			if ((fd = bpf_obj_get(pin)) <= 0) E(1, "Pinned obj_get failed [ %s ]", pin);
-			if (sd_notifyf(false, "FDSTOREREMOVE=1\nFDNAME=%s", name) <= 0)
+			if (sd_notifyf(false, "FDSTOREREMOVE=1\nFDNAME=%s\n", name) <= 0)
 				E(1, "sd_listen_fds fd-cleanup failed [ %s ]", name);
 			if (sd_pid_notifyf_with_fds( 0, false, &fd, 1,
-					"FDSTORE=1\nFDPOLL=0\nFDNAME=%s", name ) <= 0)
+					"FDSTORE=1\nFDPOLL=0\nFDNAME=%s\n", name ) <= 0)
 				E(1, "sd_notify fdstore failed for prog-link #%d [ %s ]", n, name); } }
 
 	// Report success/failure
