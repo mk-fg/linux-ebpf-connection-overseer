@@ -81,7 +81,7 @@ build/libbpf.a: $(wildcard libbpf/src/*.[ch] libbpf/src/Makefile) | build/libbpf
 build/bpftool/bootstrap/bpftool: | build/bpftool bpftool/libbpf/src
 	$(MAKE) ARCH= CROSS_COMPILE= OUTPUT=../../build/bpftool/ -C bpftool/src bootstrap
 
-build/sd-daemon/libsd-daemon.a: $(wildcard sd-daemon/*.[ch] sd-daemon/configure sd-daemon/*.in)
+build/sd-daemon/libsd-daemon.a: $(wildcard sd-daemon/*.[ch] sd-daemon/configure sd-daemon/*.in) | build
 	cp -r sd-daemon/. build/sd-daemon
 	cd build/sd-daemon && ./configure && $(MAKE)
 
