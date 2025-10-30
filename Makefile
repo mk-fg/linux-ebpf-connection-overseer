@@ -1,4 +1,4 @@
-# Makefile for eBPF loader binary
+# Makefile for all components of the tool
 
 # Make sure to adjust those when building for non-running kernel
 KERNEL_DIR := $(shell \
@@ -53,9 +53,9 @@ EBPF_CFLAGS = -I. \
 	-g -O2 -emit-llvm
 EBPF_STRIP := $(STRIP) -g
 
-BIN_CFLAGS := -Wall -Ibuild $(BIN_EXTRA_CFLAGS)
-BIN_LDFLAGS := $(LDFLAGS) $(BIN_EXTRA_LDFLAGS)
-BIN_STRIP := $(STRIP)
+BIN_CFLAGS = -Wall $(BIN_EXTRA_CFLAGS)
+BIN_LDLIBS = -lelf -lz $(BIN_EXTRA_LDLIBS)
+BIN_STRIP = $(STRIP)
 
 
 all: leco-ebpf-load leco-sdl-widget leco-sdl-widget.ini
@@ -100,8 +100,8 @@ build/ebpf.skel.h: build/ebpf.o | build build/bpftool/bootstrap/bpftool
 
 leco-ebpf-load: loader.c build/ebpf.skel.h build/libbpf.a build/sd-daemon/libsd-daemon.a
 	$(CC) $< \
-		-Ibuild/sd-daemon build/libbpf.a build/sd-daemon/libsd-daemon.a \
-		$(BIN_CFLAGS) $(BIN_LDFLAGS) -lelf -lz -o $@
+		-Ibuild -Ibuild/sd-daemon build/libbpf.a build/sd-daemon/libsd-daemon.a \
+		$(BIN_CFLAGS) $(BIN_LDLIBS) -o $@
 	$(BIN_STRIP) $@
 
 
